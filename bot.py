@@ -25,7 +25,23 @@ GOOGLE_TOKEN_JSON = os.getenv("GOOGLE_TOKEN_JSON")
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 genai.configure(api_key=GEMINI_API_KEY)
 
-model = genai.GenerativeModel('gemini-3.5-flash')
+# Инструкция для ИИ (вынесена отдельно)
+SYSTEM_INSTRUCTION = """Ты личный ассистент и наставник S1get по тайм-менеджменту. 
+Ты ведешь его долгосрочную память, чтобы помогать ему планировать жизнь и учебу в ВУЗе.
+Общайся четко, структурно, по делу, иногда можешь быть строгим."""
+
+# === БЕСШОВНОЕ РЕЗЕРВИРОВАНИЕ НЕЙРОСЕТЕЙ ===
+# Если основная модель недоступна или исчерпала лимиты, бот переключится на резервную
+def generate_ai_content(prompt):
+    models_to_try = ['gemini-3.5-flash', 'gemini-3.1-flash-lite']
+    for model_name in models_to_try:
+        try:
+            m = genai.GenerativeModel(model_name, system_instruction=SYSTEM_INSTRUCTION)
+            response = m.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            print(f"Модель {model_name} временно недоступна: {e}. Пробуем следующую...")
+    raise Exception("Все доступные нейросети исчерпали лимиты!")
 
 # Настраиваем фоновый планировщик по Москве
 scheduler = BackgroundScheduler(timezone=pytz.timezone("Europe/Moscow"))
@@ -76,32 +92,90 @@ def is_me(message):
 # === ФУНКЦИЯ ОТПРАВКИ НАПОМИНАНИЯ ===
 def send_dynamic_reminder(chat_id, task_text):
     try:
-        # ИИ генерирует бодрый текст пинка для конкретной задачи
-        prompt = f"Ты личный строгий ассистент Павла. Сработало его запланированное напоминание: '{task_text}'. Напиши ему короткое, очень емкое и мотивирующее сообщение прямо сейчас, чтобы он встал и сделал это."
-        response = model.generate_content(prompt)
-        reply = response.text
+        prompt = f"Ты личный строгий ассистент Павел. Сработало его запланированное напоминание: '{task_text}'. Напиши ему короткое, очень емкое и мотивирующее сообщение прямо сейчас."
+        reply = generate_ai_content(prompt)
     except Exception as e:
         reply = f"Пора делать: {task_text}"
         
     bot.send_message(chat_id, f"⏰ **НАПОМИНАНИЕ!**\n\n{reply}")
 
+# === КОМАНДЫ ДЛЯ СВЯЗИ С OBSIDIAN ===
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    if not is_me(message):
-        bot.reply_to(message, "Доступ запрещен.")
-        return
-    bot.reply_to(message, "Привет! Твой личный мозг запущен. Я готов ставить напоминания на любое время. Просто напиши мне: 'Напомни мне [когда] [что сделать]'.")
+    if not is_me(message): return
+    bot.reply_to(message, "Привет! Я готов ставить напоминания и управлять твоим Obsidian. Напиши `/todo` чтобы посмотреть список задач.")
 
-# Основной чат с умным планированием
+# 1. Показ активных задач из Obsidian
+@bot.message_handler(commands=['todo'])
+def show_todo(message):
+    if not is_me(message): return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        content = read_file_from_drive("Memory.md")
+        lines = content.split("\n")
+        todo_list = []
+        for line in lines:
+            if "[ ]" in line:
+                # Очищаем строку от маркдаун-тегов для красивого вывода
+                clean_task = line.replace("* [ ]", "").replace("- [ ]", "").replace("[ ]", "").strip()
+                todo_list.append(clean_task)
+        
+        if not todo_list:
+            bot.reply_to(message, "У тебя нет активных задач! Отличная работа. 🎉")
+        else:
+            reply = "📋 **Твои активные задачи из Obsidian:**\n\n"
+            for idx, task in enumerate(todo_list, 1):
+                reply += f"{idx}. {task}\n"
+            reply += "\n*Чтобы выполнить задачу, напиши:* `/done <номер>`"
+            bot.reply_to(message, reply, parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка при чтении задач: {e}")
+
+# 2. Удаленное выполнение задачи в Obsidian
+@bot.message_handler(commands=['done'])
+def mark_done(message):
+    if not is_me(message): return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        args = message.text.split()
+        if len(args) < 2 or not args[1].isdigit():
+            bot.reply_to(message, "Укажи номер задачи. Пример: `/done 1`", parse_mode="Markdown")
+            return
+        
+        task_num = int(args[1])
+        content = read_file_from_drive("Memory.md")
+        lines = content.split("\n")
+        
+        # Находим индексы строк с активными чекбоксами
+        todo_indices = []
+        for i, line in enumerate(lines):
+            if "[ ]" in line:
+                todo_indices.append(i)
+        
+        if task_num < 1 or task_num > len(todo_indices):
+            bot.reply_to(message, f"Неверный номер. Всего задач: {len(todo_indices)}")
+            return
+        
+        target_line_idx = todo_indices[task_num - 1]
+        task_text = lines[target_line_idx].replace("[ ]", "").replace("*", "").replace("-", "").strip()
+        
+        # Меняем [ ] на [x]
+        lines[target_line_idx] = lines[target_line_idx].replace("[ ]", "[x]")
+        new_content = "\n".join(lines)
+        
+        write_file_to_drive("Memory.md", new_content)
+        bot.reply_to(message, f"🎯 **Задача выполнена и отмечена в твоем Obsidian!**\n\n> {task_text}")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка при выполнении задачи: {e}")
+
+# Основной чат
 @bot.message_handler(func=lambda message: True)
 def chat_with_gemini(message):
-    if not is_me(message):
-        return 
-        
+    if not is_me(message): return 
     bot.send_chat_action(message.chat.id, 'typing') 
     
     try:
-        # Читаем память
         try:
             current_memory = read_file_from_drive("Memory.md")
         except Exception as drive_err:
@@ -111,15 +185,10 @@ def chat_with_gemini(message):
         if not current_memory:
             current_memory = "Пока пустая долгосрочная память. Запиши важные факты о пользователе."
 
-        # Получаем текущее время в Москве для ИИ
         msk_tz = pytz.timezone("Europe/Moscow")
         now_msk = datetime.now(msk_tz).strftime("%Y-%m-%d %H:%M:%S")
 
-        # Промпт с обучением планированию
-        prompt = f"""Ты личный ассистент и наставник S1get по тайм-менеджменту. 
-Ты ведешь его долгосрочную память, чтобы помогать ему планировать жизнь и учебу в ВУЗе.
-
-Текущее время в Москве: {now_msk}
+        prompt = f"""Текущее время в Москве: {now_msk}
 
 Вот твоя текущая долгосрочная память:
 ---
@@ -145,10 +214,9 @@ S1get пишет тебе: "{message.text}"
 Если напоминаний создавать не нужно, оставь этот блок пустым.
 """
 
-        response = model.generate_content(prompt)
-        raw_text = response.text
+        # Запускаем генерацию с автопереключением нейросетей
+        raw_text = generate_ai_content(prompt)
 
-        # Разбираем блоки [SCHEDULE], [ОТВЕТ] и [ПАМЯТЬ]
         schedule_part = ""
         if "[SCHEDULE]" in raw_text:
             parts = raw_text.split("[SCHEDULE]")
@@ -163,25 +231,22 @@ S1get пишет тебе: "{message.text}"
             reply_part = raw_text
             memory_part = current_memory
 
-        # 1. Сохраняем память на Диск
         try:
             write_file_to_drive("Memory.md", memory_part)
         except Exception as drive_err:
             print(f"Не удалось записать на диск: {drive_err}")
             reply_part += f"\n\n⚠️ (Заметка не сохранилась на Диск: {drive_err})"
 
-        # 2. Планируем динамическое напоминание в фоновом режиме
+        # Планируем напоминание
         if schedule_part and "|" in schedule_part:
             try:
                 dt_str, task_text = schedule_part.split("|", 1)
                 dt_str = dt_str.strip()
                 task_text = task_text.strip()
                 
-                # Парсим дату в Московском часовом поясе
                 run_date = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
                 run_date = msk_tz.localize(run_date)
                 
-                # Добавляем задачу в планировщик
                 scheduler.add_job(
                     send_dynamic_reminder, 
                     'date', 
@@ -193,7 +258,6 @@ S1get пишет тебе: "{message.text}"
                 print(f"Ошибка планирования: {sched_err}")
                 reply_part += f"\n\n⚠️ (Не удалось завести будильник: {sched_err})"
 
-        # 3. Отвечаем в ТГ
         bot.reply_to(message, reply_part)
 
     except Exception as e:
@@ -203,7 +267,7 @@ S1get пишет тебе: "{message.text}"
 app = Flask(__name__)
 @app.route('/')
 def home():
-    return "Мозг жив и синхронизирован!"
+    return "Мозг жив, зарезервирован и синхронизирован!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))

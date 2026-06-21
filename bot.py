@@ -14,7 +14,7 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 genai.configure(api_key=GEMINI_API_KEY)
 
 model = genai.GenerativeModel(
-    'gemini-2.0-flash', 
+    'gemini-1.5-flash', 
     system_instruction="""Ты личный ассистент и наставник по тайм-менеджменту для студента вуза. 
     Твоя цель: структурировать хаос. Общайся четко, по делу, иногда можешь быть строгим. 
     Используй списки и выделяй главное. Всегда старайся разбивать большие задачи на мелкие шаги."""

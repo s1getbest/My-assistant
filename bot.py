@@ -51,11 +51,17 @@ def read_drive(name):
     while not done: _, done = downloader.next_chunk()
     return fh.getvalue().decode('utf-8')
 
-def write_drive(name, content):
-    fid = get_file_id(name)
-    media = MediaIoBaseUpload(io.BytesIO(content.encode('utf-8')), mimetype='text/markdown', resumable=True)
-    if fid: drive_service.files().update(fileId=fid, media_body=media).execute()
-    else: drive_service.files().create(body={'name': name, 'parents': [FOLDER_ID]}, media_body=media).execute()
+def append_to_drive(filename, text_to_add):
+    file_id = get_file_id_by_name(filename)
+    current_content = read_file_from_drive(filename)
+    new_content = current_content + "\n" + text_to_add
+    
+    media = MediaIoBaseUpload(io.BytesIO(new_content.encode('utf-8')), mimetype='text/markdown', resumable=True)
+    if file_id:
+        drive_service.files().update(fileId=file_id, media_body=media).execute()
+    else:
+        file_metadata = {'name': filename, 'parents': [FOLDER_ID]}
+        drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
 # === ЛОГИКА НАПОМИНАНИЙ ===
 def send_alert(chat_id, text):
@@ -86,9 +92,18 @@ def chat(message):
     bot.send_chat_action(message.chat.id, 'typing')
     now_msk = datetime.now(msk_tz).strftime("%Y-%m-%d %H:%M")
     memory = read_drive("Memory.md")
-    
-    prompt = f"Время: {now_msk}. Память:\n{memory}\n\nЮзер: {message.text}\n\nОтветь, обнови память. Если просит напомнить, выведи в конце блока [SCHEDULE] формат: ГГГГ-ММ-ДД ЧЧ:ММ | Текст"
-    
+    # Замени промпт в функции chat_with_gemini на этот:
+    prompt = f"""
+        Ты - S1get-Agent, исполняющая система. 
+        Твоя цель - управлять файлом Memory.md.
+        
+        Твои команды:
+        1. Если пользователь дает задачу с временем, верни ОДНУ строку: [SCHEDULE] ГГГГ-ММ-ДД ЧЧ:ММ | Текст задачи
+        2. Если пользователь хочет добавить обычную задачу, верни: [ADD] [ ] Текст задачи
+        3. Если это просто вопрос, ответь кратко (до 2 предложений).
+        
+        НЕ ПОВТОРЯЙ содержимое файла памяти в ответе. Только результат действия.
+        """
     try:
         res = model.generate_content(prompt).text
         # Разделение логики (упрощенное)

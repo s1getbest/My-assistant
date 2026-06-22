@@ -1,5 +1,5 @@
 pyTelegramBotAPI
-google-generativeai
+google-genai
 flask
 google-api-python-client
 google-auth

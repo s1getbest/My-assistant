@@ -1,5 +1,6 @@
 import telebot
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import os
 import json
 import io
@@ -26,8 +27,8 @@ FOLDER_ID = os.getenv("FOLDER_ID")
 GOOGLE_TOKEN_JSON = os.getenv("GOOGLE_TOKEN_JSON")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+ai_client = genai.Client(api_key=GEMINI_API_KEY)
+GEMINI_MODEL = 'gemini-1.5-flash'
 msk_tz = pytz.timezone("Europe/Moscow")
 
 scheduler = BackgroundScheduler(timezone=msk_tz)
@@ -302,7 +303,10 @@ def is_me(message):
 def send_dynamic_reminder(chat_id, task_text):
     try:
         prompt = f"Ты личный строгий ассистент Павел. Сработало напоминание: '{task_text}'. Напиши короткое, очень емкое и мотивирующее сообщение прямо сейчас."
-        response = model.generate_content(prompt)
+        response = ai_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt
+        )
         reply = response.text
     except Exception:
         reply = f"Пора делать: {task_text}"
@@ -352,7 +356,10 @@ Current content:
 
 Output only the resulting compressed list in Markdown format (using bullet points like "* fact"). Do not include any intro, outro, or additional conversational text.
 """
-        response = model.generate_content(prompt)
+        response = ai_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt
+        )
         compressed_text = response.text.strip()
 
         if compressed_text:
@@ -512,13 +519,16 @@ def handle_voice(message):
 Твой ответ пользователю
 (далее теги, если нужны — каждый с новой строки)
 """
-        response = model.generate_content([
-            {
-                "mime_type": "audio/ogg",
-                "data": downloaded_file
-            },
-            prompt
-        ])
+        response = ai_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[
+                types.Part.from_bytes(
+                    data=downloaded_file,
+                    mime_type="audio/ogg"
+                ),
+                prompt
+            ]
+        )
         raw_text = response.text
 
         tags = parse_gemini_tags(raw_text)
@@ -585,9 +595,12 @@ S1get пишет: "{user_message_text}"
 Формат ответа:
 [ОТВЕТ]
 Твой ответ пользователю
-(далее теги, если нужны — каждый с новой строки)
+(далее теги, if elements needed — каждый с новой строки)
 """
-        response = model.generate_content(prompt)
+        response = ai_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt
+        )
         raw_text = response.text
 
         tags = parse_gemini_tags(raw_text)
@@ -967,11 +980,6 @@ def home():
     )
 
 
-threading.Thread(
-    target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), use_reloader=False),
-    daemon=True,
-).start()
-
 print("Запуск...")
 # === НАСТРОЙКА WEBHOOK (Вместо polling) ===
 WEBHOOK_URL = f"https://my-assistant-k7rq.onrender.com/webhook/{TELEGRAM_TOKEN}"
@@ -986,5 +994,7 @@ def webhook():
 # Устанавливаем Webhook при запуске
 bot.remove_webhook()
 bot.set_webhook(url=WEBHOOK_URL)
+
+app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), use_reloader=False)
 
 # Не забудь добавить 'request' в импорты (from flask import Flask, render_template_string, request)

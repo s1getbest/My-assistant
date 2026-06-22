@@ -161,7 +161,10 @@ def chat_with_gemini(message):
 
         now_msk = datetime.now(msk_tz).strftime("%Y-%m-%d %H:%M")
 
+        today_str = datetime.now(msk_tz).strftime("%Y-%m-%d")
+
         prompt = f"""Текущее время в Москве: {now_msk}
+Сегодняшняя дата: {today_str}
 
 Вот твоя текущая долгосрочная память:
 ---
@@ -171,47 +174,88 @@ def chat_with_gemini(message):
 S1get пишет тебе: "{message.text}"
 
 Твоя задача:
-1. Ответь на его сообщение в своем фирменном стиле (четко, по делу, структурировано).
-2. Если в сообщении есть важные факты, обнови долгосрочную память (сохранив старые данные).
-3. ЕСЛИ пользователь просит напомнить ему о чем-то в конкретное время (например: "напомни сегодня в 21:00...", "напомни через 20 минут...", "напомни завтра в полдень..."), ты должен вычислить точную дату и время этого события в формате ГГГГ-ММ-ДД ЧЧ:ММ по Московскому времени.
+1. Ответь на его сообщение в своем фирменном стиле (четко, по делу, структурировано). В блоке [ОТВЕТ] НЕ перечисляй и НЕ дублируй весь список памяти — только живой ответ пользователю.
+2. Если в сообщении есть важные факты, обнови долгосрочную память (сохранив старые данные) в блоке [ПАМЯТЬ].
+3. ЕСЛИ пользователь просит напомнить о чём-то в конкретное время ("напомни сегодня в 21:00...", "напомни через 20 минут..."), вычисли точную дату и время в формате ГГГГ-ММ-ДД ЧЧ:ММ по Москве. Блок [SCHEDULE]: ГГГГ-ММ-ДД ЧЧ:ММ | Текст напоминания.
+4. ЕСЛИ пользователь в свободной форме упомянул сон ("поспал 8 часов", "спал 7.5 часов", "сон 6 ч"), извлеки часы. Блок [HEALTH_RECORD]: ГГГГ-ММ-ДД: <часы>
+5. ЕСЛИ пользователь упомянул расход ("потратил 450р на обед", "купил проездной за 300 рублей"), извлеки сумму и описание. Блок [FINANCE_RECORD]: ГГГГ-ММ-ДД: <сумма> | <описание>
 
-Выведи свой ответ СТРОГО в следующем формате (используй разделители [SEPARATOR] и [SCHEDULE]):
+Выведи ответ СТРОГО в формате:
 [ОТВЕТ]
-Текст твоего ответа пользователю (подтверди, что ты запланировал напоминание, если он просил).
+Текст ответа пользователю (кратко подтверди запись сна/расхода или напоминание, если применимо).
 [SEPARATOR]
 [ПАМЯТЬ]
-Весь обновленный список памяти (включая старые и новые факты). Если изменений нет, скопируй старую память без изменений. Помни: не дублируй записи!
+Весь обновлённый список памяти (старые + новые факты). Если изменений нет — скопируй старую память. Не дублируй записи!
 [SEPARATOR]
 [SCHEDULE]
-Если нужно создать напоминание, напиши СТРОГО в одну строку: ГГГГ-ММ-ДД ЧЧ:ММ | Текст напоминания
-Если напоминаний создавать не нужно, оставь этот блок пустым.
+Текст напоминания (если нужно, иначе пусто).
+[SEPARATOR]
+[HEALTH_RECORD]
+Данные сна (если были, иначе пусто).
+[SEPARATOR]
+[FINANCE_RECORD]
+Данные расхода (если были, иначе пусто).
 """
-
+        
         response = model.generate_content(prompt)
         raw_text = response.text
 
-        schedule_part = ""
-        if "[SCHEDULE]" in raw_text:
-            parts = raw_text.split("[SCHEDULE]")
-            schedule_part = parts[1].strip()
-            raw_text = parts[0].strip()
+        def extract_block(text, block_name):
+            marker = f"[{block_name}]"
+            if marker not in text:
+                return ""
+            part = text.split(marker, 1)[1]
+            if "[SEPARATOR]" in part:
+                return part.split("[SEPARATOR]", 1)[0].strip()
+            return part.strip()
+
+        schedule_part = extract_block(raw_text, "SCHEDULE")
+        health_record = extract_block(raw_text, "HEALTH_RECORD")
+        finance_record = extract_block(raw_text, "FINANCE_RECORD")
 
         if "[SEPARATOR]" in raw_text:
             parts = raw_text.split("[SEPARATOR]")
             reply_part = parts[0].replace("[ОТВЕТ]", "").strip()
-            memory_part = parts[1].replace("[ПАМЯТЬ]", "").strip()
+            memory_part = parts[1].replace("[ПАМЯТЬ]", "").strip() if len(parts) > 1 else current_memory
         else:
-            reply_part = raw_text
+            reply_part = raw_text.replace("[ОТВЕТ]", "").strip()
             memory_part = current_memory
 
-        # Записываем память на Диск
+        # 1. Записываем память на Диск
         try:
             write_file_to_drive("Memory.md", memory_part)
         except Exception as drive_err:
-            print(f"Не удалось записать на диск: {drive_err}")
-            reply_part += f"\n\n⚠️ (Заметка не сохранилась на Диск: {drive_err})"
+            reply_part += f"\n\n⚠️ (Не удалось сохранить в Memory: {drive_err})"
 
-        # Планируем напоминание
+        # 2. Если ИИ вытащил сон — пишем в Health.md
+        if health_record and ":" in health_record:
+            try:
+                dt_s, hours = health_record.split(":", 1)
+                dt_s, hours = dt_s.strip(), hours.strip()
+                try:
+                    current_health = read_file_from_drive("Health.md")
+                except Exception:
+                    current_health = ""
+                new_health = current_health.strip() + f"\n* {dt_s}: {hours}"
+                write_file_to_drive("Health.md", new_health.strip())
+            except Exception as e:
+                print(f"Ошибка записи сна из разговора: {e}")
+
+        # 3. Если ИИ вытащил расход — пишем в Finance.md
+        if finance_record and ":" in finance_record:
+            try:
+                dt_s, val_p = finance_record.split(":", 1)
+                dt_s, val_p = dt_s.strip(), val_p.strip()
+                try:
+                    current_finance = read_file_from_drive("Finance.md")
+                except Exception:
+                    current_finance = ""
+                new_finance = current_finance.strip() + f"\n* {dt_s}: {val_p}"
+                write_file_to_drive("Finance.md", new_finance.strip())
+            except Exception as e:
+                print(f"Ошибка записи финансов из разговора: {e}")
+
+        # 4. Планируем напоминание
         if schedule_part and "|" in schedule_part:
             try:
                 dt_str, task_text = schedule_part.split("|", 1)
@@ -227,19 +271,33 @@ S1get пишет тебе: "{message.text}"
                     run_date=run_date, 
                     args=[MY_TELEGRAM_ID, task_text]
                 )
-                print(f"Успешно запланировано напоминание на {dt_str}: {task_text}")
             except Exception as sched_err:
-                print(f"Ошибка планирования: {sched_err}")
                 reply_part += f"\n\n⚠️ (Не удалось завести будильник: {sched_err})"
 
         bot.reply_to(message, reply_part)
 
     except Exception as e:
-        bot.reply_to(message, f"Ошибка в логике ИИ: {e}")
+        bot.reply_to(message, f"Ошибка: {e}")
 
 # === WEB SERVER ===
 app = Flask(__name__)
+# === ПРОАКТИВНЫЙ ПИНГ (Проверка сна в 10:00 утра) ===
+def check_daily_sleep():
+    try:
+        today_str = datetime.now(msk_tz).strftime("%Y-%m-%d")
+        health_content = read_file_from_drive("Health.md")
+        
+        # Если в файле здоровья нет сегодняшней даты, бот сам начинает диалог
+        if today_str not in health_content:
+            bot.send_message(
+                MY_TELEGRAM_ID, 
+                "Павел, доброе утро! 🛌 Я заметил, что сегодня ты еще не записал свой сон. Расскажи, сколько часов удалось поспать и как самочувствие?"
+            )
+    except Exception as e:
+        print(f"Ошибка проактивного пинга: {e}")
 
+# Добавляем задачу в наш планировщик (каждый день в 10:00 по Москве)
+scheduler.add_job(check_daily_sleep, 'cron', hour=10, minute=0)
 @app.route('/')
 def home():
     # 1. Читаем активные задачи из Memory.md
@@ -254,20 +312,25 @@ def home():
     except Exception as e:
         todo_list = [f"Ошибка задач: {e}"]
 
-    # 2. Читаем и суммируем расходы из Finance.md
+    # 2. Читаем и суммируем расходы за текущий месяц из Finance.md
     try:
         finance_content = read_file_from_drive("Finance.md")
         finance_lines = [l.strip() for l in finance_content.split("\n") if l.strip()]
+        current_month = datetime.now(msk_tz).strftime("%Y-%m")
         total_spent = 0
         for line in finance_lines:
-            if ":" in line:
-                val_part = line.split(":")[-1].strip()
-                num_part = val_part.split("|")[0].strip()
-                try:
-                    total_spent += int(num_part)
-                except:
-                    pass
-    except Exception as e:
+            if ":" not in line:
+                continue
+            date_part = line.split(":", 1)[0].replace("*", "").strip()
+            if not date_part.startswith(current_month):
+                continue
+            val_part = line.split(":", 1)[1].strip()
+            num_part = val_part.split("|")[0].strip().replace("₽", "").replace("р", "").replace("руб", "").strip()
+            try:
+                total_spent += int(float(num_part))
+            except ValueError:
+                pass
+    except Exception:
         total_spent = 0
 
     # 3. Читаем данные сна для графика (последние 7 записей)
@@ -281,17 +344,20 @@ def home():
             last_line = health_lines[-1]
             last_sleep = last_line.split(":")[-1].strip()
             
-            # Собираем последние 7 дней для графика
             for line in health_lines[-7:]:
-                if ":" in line:
-                    date_part = line.split(":")[0].replace("*", "").strip()
-                    val_part = line.split(":")[-1].strip()
-                    try:
-                        formatted_date = datetime.strptime(date_part, "%Y-%m-%d").strftime("%d.%m")
-                    except:
-                        formatted_date = date_part
-                    sleep_data.append(float(val_part))
+                if ":" not in line:
+                    continue
+                date_part = line.split(":", 1)[0].replace("*", "").strip()
+                val_part = line.split(":", 1)[1].strip()
+                try:
+                    formatted_date = datetime.strptime(date_part, "%Y-%m-%d").strftime("%d.%m")
+                except ValueError:
+                    formatted_date = date_part
+                try:
+                    sleep_data.append(float(val_part.replace(",", ".")))
                     sleep_labels.append(formatted_date)
+                except ValueError:
+                    pass
     except Exception as e:
         sleep_data = [0]
         sleep_labels = ["Нет данных"]
@@ -384,28 +450,56 @@ def home():
 
         <script>
             const ctx = document.getElementById('sleepChart').getContext('2d');
+            const neonGradient = ctx.createLinearGradient(0, 0, 0, 112);
+            neonGradient.addColorStop(0, 'rgba(129, 140, 248, 0.35)');
+            neonGradient.addColorStop(1, 'rgba(129, 140, 248, 0)');
+
+            const neonGlow = {
+                id: 'neonGlow',
+                beforeDatasetsDraw(chart) {
+                    const { ctx } = chart;
+                    ctx.save();
+                    ctx.shadowColor = 'rgba(129, 140, 248, 0.9)';
+                    ctx.shadowBlur = 14;
+                },
+                afterDatasetsDraw(chart) {
+                    chart.ctx.restore();
+                }
+            };
+
             new Chart(ctx, {
                 type: 'line',
                 data: {
                     labels: {{ sleep_labels|tojson }},
                     datasets: [{
                         data: {{ sleep_data|tojson }},
-                        borderColor: 'rgb(99, 102, 241)',
-                        backgroundColor: 'rgba(99, 102, 241, 0.1)',
-                        tension: 0.3,
+                        borderColor: '#818cf8',
+                        backgroundColor: neonGradient,
+                        tension: 0.4,
                         fill: true,
-                        borderWidth: 2,
-                        pointBackgroundColor: 'rgb(99, 102, 241)',
-                        pointRadius: 2
+                        borderWidth: 2.5,
+                        pointBackgroundColor: '#c7d2fe',
+                        pointBorderColor: '#818cf8',
+                        pointBorderWidth: 2,
+                        pointRadius: 4,
+                        pointHoverRadius: 6
                     }]
                 },
+                plugins: [neonGlow],
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: { legend: { display: false } },
                     scales: {
-                        x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 9 } } },
-                        y: { grid: { color: 'rgba(148, 163, 184, 0.05)' }, ticks: { color: '#94a3b8', font: { size: 9 } } }
+                        x: {
+                            grid: { display: false },
+                            ticks: { color: '#94a3b8', font: { size: 9 } }
+                        },
+                        y: {
+                            min: 0,
+                            grid: { color: 'rgba(129, 140, 248, 0.08)' },
+                            ticks: { color: '#94a3b8', font: { size: 9 }, stepSize: 2 }
+                        }
                     }
                 }
             });

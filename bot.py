@@ -11,6 +11,8 @@ from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 import pytz
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
+from flask import Flask, render_template_string, request
+
 
 # === КЛЮЧИ И НАСТРОЙКИ ИЗ ОБЛАКА ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -513,4 +515,18 @@ def home():
 threading.Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))).start()
 
 print("Запуск...")
-bot.infinity_polling()
+# === НАСТРОЙКА WEBHOOK (Вместо polling) ===
+WEBHOOK_URL = f"https://my-assistant-k7rq.onrender.com/webhook/{TELEGRAM_TOKEN}"
+
+@app.route(f'/webhook/{TELEGRAM_TOKEN}', methods=['POST'])
+def webhook():
+    json_str = request.stream.read().decode('utf-8')
+    update = telebot.types.Update.de_json(json_str)
+    bot.process_new_updates([update])
+    return '!', 200
+
+# Устанавливаем Webhook при запуске
+bot.remove_webhook()
+bot.set_webhook(url=WEBHOOK_URL)
+
+# Не забудь добавить 'request' в импорты (from flask import Flask, render_template_string, request)

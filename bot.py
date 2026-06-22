@@ -4,6 +4,7 @@ import os
 import json
 import io
 import re
+import time
 import threading
 from flask import Flask, render_template_string, request, jsonify
 from google.oauth2.credentials import Credentials
@@ -12,7 +13,6 @@ from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 import pytz
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
-from flask import Flask, render_template_string, request
 
 
 # === КЛЮЧИ И НАСТРОЙКИ ===
@@ -30,14 +30,19 @@ msk_tz = pytz.timezone("Europe/Moscow")
 scheduler = BackgroundScheduler(timezone=msk_tz)
 scheduler.start()
 
-drive_service = None
+_drive_creds = None
 try:
     token_data = json.loads(GOOGLE_TOKEN_JSON)
-    creds = Credentials.from_authorized_user_info(token_data, scopes=["https://www.googleapis.com/auth/drive"])
-    drive_service = build('drive', 'v3', credentials=creds)
+    _drive_creds = Credentials.from_authorized_user_info(token_data, scopes=["https://www.googleapis.com/auth/drive"])
     print("Успешно авторизовались на Google Drive!")
 except Exception as e:
     print(f"Ошибка авторизации Google Drive: {e}")
+
+
+def get_drive_service():
+    if _drive_creds is None:
+        raise RuntimeError("Google Drive credentials not initialized")
+    return build('drive', 'v3', credentials=_drive_creds)
 
 TAG_TYPES = ("TASK", "FINANCE", "HEALTH", "MEMORY", "SCHEDULE")
 TAG_LINE_RE = re.compile(r'^\[(TASK|FINANCE|HEALTH|MEMORY|SCHEDULE)\]\s*(.+)$', re.MULTILINE)
@@ -48,8 +53,9 @@ TASK_TIME_RE = re.compile(r'(\d{2}:\d{2})\s*\|\s*(.+)$')
 
 def get_file_id_by_name(filename):
     try:
+        service = get_drive_service()
         query = f"name = '{filename}' and '{FOLDER_ID}' in parents and trashed = false"
-        results = drive_service.files().list(q=query, spaces='drive', fields='files(id)').execute()
+        results = service.files().list(q=query, spaces='drive', fields='files(id)').execute()
         files = results.get('files', [])
         return files[0]['id'] if files else None
     except Exception as e:
@@ -57,33 +63,48 @@ def get_file_id_by_name(filename):
         return None
 
 def read_file_from_drive(filename):
-    try:
-        file_id = get_file_id_by_name(filename)
-        if not file_id:
-            return ""
-        request = drive_service.files().get_media(fileId=file_id)
-        fh = io.BytesIO()
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
-        return fh.getvalue().decode('utf-8')
-    except Exception as e:
-        print(f"Drive read error ({filename}): {e}")
-        return ""
+    last_err = None
+    for attempt in range(3):
+        try:
+            file_id = get_file_id_by_name(filename)
+            if not file_id:
+                return ""
+            service = get_drive_service()
+            request = service.files().get_media(fileId=file_id)
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            return fh.getvalue().decode('utf-8')
+        except Exception as e:
+            last_err = e
+            print(f"Drive read error ({filename}) attempt {attempt + 1}/3: {e}")
+            if attempt < 2:
+                time.sleep(1)
+    print(f"Drive read failed ({filename}): {last_err}")
+    return ""
 
 def write_file_to_drive(filename, content):
-    try:
-        file_id = get_file_id_by_name(filename)
-        media = MediaIoBaseUpload(io.BytesIO(content.encode('utf-8')), mimetype='text/markdown', resumable=True)
-        if file_id:
-            drive_service.files().update(fileId=file_id, media_body=media).execute()
-        else:
-            file_metadata = {'name': filename, 'parents': [FOLDER_ID]}
-            drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-    except Exception as e:
-        print(f"Drive write error ({filename}): {e}")
-        raise
+    last_err = None
+    for attempt in range(3):
+        try:
+            service = get_drive_service()
+            file_id = get_file_id_by_name(filename)
+            media = MediaIoBaseUpload(io.BytesIO(content.encode('utf-8')), mimetype='text/markdown', resumable=True)
+            if file_id:
+                service.files().update(fileId=file_id, media_body=media).execute()
+            else:
+                file_metadata = {'name': filename, 'parents': [FOLDER_ID]}
+                service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+            return
+        except Exception as e:
+            last_err = e
+            print(f"Drive write error ({filename}) attempt {attempt + 1}/3: {e}")
+            if attempt < 2:
+                time.sleep(1)
+    print(f"Drive write failed ({filename}): {last_err}")
+    raise last_err
 
 def append_line_to_drive(filename, line):
     try:

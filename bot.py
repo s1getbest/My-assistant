@@ -28,8 +28,9 @@ GOOGLE_TOKEN_JSON = os.getenv("GOOGLE_TOKEN_JSON")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
-GEMINI_MODEL = 'gemini-1.5-flash'
+GEMINI_MODEL = 'gemini-3.5-flash'
 msk_tz = pytz.timezone("Europe/Moscow")
+
 
 scheduler = BackgroundScheduler(timezone=msk_tz)
 scheduler.start()

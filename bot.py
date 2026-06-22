@@ -6,6 +6,9 @@ import io
 import re
 import time
 import threading
+import hmac
+import hashlib
+import urllib.parse
 from flask import Flask, render_template_string, request, jsonify
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -24,7 +27,7 @@ GOOGLE_TOKEN_JSON = os.getenv("GOOGLE_TOKEN_JSON")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-3.5-flash')
+model = genai.GenerativeModel('gemini-1.5-flash')
 msk_tz = pytz.timezone("Europe/Moscow")
 
 scheduler = BackgroundScheduler(timezone=msk_tz)
@@ -44,10 +47,15 @@ def get_drive_service():
         raise RuntimeError("Google Drive credentials not initialized")
     return build('drive', 'v3', credentials=_drive_creds)
 
-TAG_TYPES = ("TASK", "FINANCE", "HEALTH", "MEMORY", "SCHEDULE")
-TAG_LINE_RE = re.compile(r'^\[(TASK|FINANCE|HEALTH|MEMORY|SCHEDULE)\]\s*(.+)$', re.MULTILINE)
+TAG_TYPES = ("TASK", "FINANCE", "HEALTH", "MEMORY", "SCHEDULE", "QUESTION")
+TAG_LINE_RE = re.compile(r'^\[(TASK|FINANCE|HEALTH|MEMORY|SCHEDULE|QUESTION)\]\s*(.+)$', re.MULTILINE)
 TASK_TIME_RE = re.compile(r'(\d{2}:\d{2})\s*\|\s*(.+)$')
 
+
+# === GOOGLE DRIVE CACHING ===
+_FILE_CACHE = {}
+_CACHE_TIME = {}
+_CACHE_LOCK = threading.Lock()
 
 # === GOOGLE DRIVE ===
 
@@ -63,6 +71,11 @@ def get_file_id_by_name(filename):
         return None
 
 def read_file_from_drive(filename):
+    # Check cache first
+    with _CACHE_LOCK:
+        if filename in _FILE_CACHE and (time.time() - _CACHE_TIME.get(filename, 0) < 300):
+            return _FILE_CACHE[filename]
+
     last_err = None
     for attempt in range(3):
         try:
@@ -76,7 +89,12 @@ def read_file_from_drive(filename):
             done = False
             while not done:
                 _, done = downloader.next_chunk()
-            return fh.getvalue().decode('utf-8')
+            content = fh.getvalue().decode('utf-8')
+            # Save to cache
+            with _CACHE_LOCK:
+                _FILE_CACHE[filename] = content
+                _CACHE_TIME[filename] = time.time()
+            return content
         except Exception as e:
             last_err = e
             print(f"Drive read error ({filename}) attempt {attempt + 1}/3: {e}")
@@ -97,6 +115,10 @@ def write_file_to_drive(filename, content):
             else:
                 file_metadata = {'name': filename, 'parents': [FOLDER_ID]}
                 service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+            # Forcefully update cache upon successful write
+            with _CACHE_LOCK:
+                _FILE_CACHE[filename] = content
+                _CACHE_TIME[filename] = time.time()
             return
         except Exception as e:
             last_err = e
@@ -111,6 +133,10 @@ def append_line_to_drive(filename, line):
         current = read_file_from_drive(filename)
         new_content = f"{current.rstrip()}\n{line}".strip() if current.strip() else line
         write_file_to_drive(filename, new_content)
+        # Forcefully update cache upon successful append (though write_file_to_drive already does)
+        with _CACHE_LOCK:
+            _FILE_CACHE[filename] = new_content
+            _CACHE_TIME[filename] = time.time()
         return True
     except Exception as e:
         print(f"Drive append error ({filename}): {e}")
@@ -250,6 +276,8 @@ def apply_gemini_tags(tags):
                 append_line_to_drive("Health.md", f"* {payload}")
             elif tag_type == "MEMORY":
                 append_line_to_drive("Memory.md", f"* {payload}")
+            elif tag_type == "QUESTION":
+                append_line_to_drive("Questions.md", f"* {payload}")
             elif tag_type == "SCHEDULE" and "|" in payload:
                 dt_str, task_text = payload.split("|", 1)
                 dt_str, task_text = dt_str.strip(), task_text.strip()
@@ -304,8 +332,41 @@ def evening_planning_reminder():
     except Exception as e:
         print(f"Evening reminder error: {e}")
 
+def compress_memory():
+    """
+    Weekly background job to compress long-term memory (Memory.md).
+    """
+    try:
+        print("Starting weekly memory compression job...")
+        content = read_file_from_drive("Memory.md")
+        if not content.strip():
+            print("Memory.md is empty, skipping compression.")
+            return
+
+        prompt = f"""This is a long-term memory file. Compress it, remove duplicates, and keep only the most important facts as a concise list.
+
+Current content:
+---
+{content}
+---
+
+Output only the resulting compressed list in Markdown format (using bullet points like "* fact"). Do not include any intro, outro, or additional conversational text.
+"""
+        response = model.generate_content(prompt)
+        compressed_text = response.text.strip()
+
+        if compressed_text:
+            write_file_to_drive("Memory.md", compressed_text)
+            print("Memory.md successfully compressed and updated.")
+        else:
+            print("Warning: Compressed memory content is empty, skipping update.")
+    except Exception as e:
+        print(f"Error compressing memory: {e}")
+
+
 scheduler.add_job(check_daily_sleep, 'cron', hour=10, minute=0)
 scheduler.add_job(evening_planning_reminder, 'cron', hour=20, minute=0)
+scheduler.add_job(compress_memory, 'cron', day_of_week='sun', hour=3, minute=0)
 
 
 # === КОМАНДЫ БОТА ===
@@ -353,12 +414,65 @@ def track_sleep(message):
     except Exception as e:
         bot.reply_to(message, f"Ошибка записи сна: {e}")
 
-@bot.message_handler(func=lambda message: True)
-def chat_with_gemini(message):
+def get_forward_sender_name(message):
+    """
+    Safely extracts the original sender's name from a forwarded message.
+    """
+    if not message.forward_origin:
+        return None
+    try:
+        origin = message.forward_origin
+        o_type = getattr(origin, 'type', None)
+        if o_type == 'user':
+            u = getattr(origin, 'sender_user', None)
+            if u:
+                parts = []
+                if getattr(u, 'first_name', None):
+                    parts.append(u.first_name)
+                if getattr(u, 'last_name', None):
+                    parts.append(u.last_name)
+                name = " ".join(parts).strip()
+                if not name and getattr(u, 'username', None):
+                    name = u.username
+                return name or "User"
+        elif o_type == 'hidden_user':
+            return getattr(origin, 'sender_user_name', "Hidden User")
+        elif o_type == 'chat':
+            c = getattr(origin, 'sender_chat', None)
+            if c:
+                return getattr(c, 'title', "Chat")
+        elif o_type == 'channel':
+            c = getattr(origin, 'chat', None)
+            if c:
+                return getattr(c, 'title', "Channel")
+        
+        # Fallback to older telegram message fields
+        if getattr(message, 'forward_from', None):
+            u = message.forward_from
+            parts = [getattr(u, 'first_name', ""), getattr(u, 'last_name', "")]
+            name = " ".join([p for p in parts if p]).strip()
+            return name or getattr(u, 'username', None) or "User"
+        elif getattr(message, 'forward_from_chat', None):
+            return getattr(message.forward_from_chat, 'title', "Chat")
+        elif getattr(message, 'forward_sender_name', None):
+            return message.forward_sender_name
+    except Exception as e:
+        print(f"Error getting forward sender name: {e}")
+    return "Unknown Sender"
+
+
+@bot.message_handler(content_types=['voice'])
+def handle_voice(message):
+    """
+    Handles incoming voice messages, downloads them, and sends to Gemini for NLU processing.
+    """
     if not is_me(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
     try:
+        voice_info = bot.get_file(message.voice.file_id)
+        downloaded_file = bot.download_file(voice_info.file_path)
+
         current_memory = read_file_from_drive("Memory.md")
         if not current_memory.strip():
             current_memory = "Пока пустая долгосрочная память."
@@ -374,7 +488,8 @@ def chat_with_gemini(message):
 {current_memory}
 ---
 
-S1get пишет: "{message.text}"
+Пользователь прислал голосовое сообщение. Текст голосового сообщения находится в прикрепленном аудиофайле.
+Внимательно прослушай аудиофайл и распознай, что говорит S1get.
 
 Ответь чётко и по делу. В [ОТВЕТ] — только живой ответ пользователю, без дублирования памяти.
 
@@ -384,12 +499,88 @@ S1get пишет: "{message.text}"
 [HEALTH] ГГГГ-ММ-ДД: часы
 [MEMORY] факт для долгосрочной памяти
 [SCHEDULE] ГГГГ-ММ-ДД ЧЧ:ММ | Текст напоминания
+[QUESTION] Name: суть вопроса
 
 Примеры распознавания:
 - "поспал 8 часов" → [HEALTH] {today_str}: 8
 - "потратил 450р на обед" → [FINANCE] {today_str}: 450 | еда | обед
 - "напомни в 21:00 позвонить маме" → [SCHEDULE] {today_str} 21:00 | Позвонить маме
 - "завтра в 9 утра тренировка" → [TASK] <дата> 09:00 | Тренировка
+
+Формат ответа:
+[ОТВЕТ]
+Твой ответ пользователю
+(далее теги, если нужны — каждый с новой строки)
+"""
+        response = model.generate_content([
+            {
+                "mime_type": "audio/ogg",
+                "data": downloaded_file
+            },
+            prompt
+        ])
+        raw_text = response.text
+
+        tags = parse_gemini_tags(raw_text)
+        reply_part = extract_reply(raw_text)
+        apply_gemini_tags(tags)
+
+        bot.reply_to(message, reply_part)
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка обработки голосового сообщения: {e}")
+
+
+@bot.message_handler(func=lambda message: True)
+def chat_with_gemini(message):
+    if not is_me(message):
+        return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        current_memory = read_file_from_drive("Memory.md")
+        if not current_memory.strip():
+            current_memory = "Пока пустая долгосрочная память."
+
+        now_msk = datetime.now(msk_tz).strftime("%Y-%m-%d %H:%M")
+        today_str = datetime.now(msk_tz).strftime("%Y-%m-%d")
+
+        # Handle forwarded messages context
+        sender_name = get_forward_sender_name(message)
+        if sender_name is not None:
+            user_message_text = f"Pavel forwarded a message from {sender_name}:\n{message.text}"
+        else:
+            user_message_text = message.text
+
+        prompt = f"""Текущее время в Москве: {now_msk}
+Сегодняшняя дата: {today_str}
+
+Долгосрочная память (Memory.md):
+---
+{current_memory}
+---
+
+S1get пишет: "{user_message_text}"
+
+Ответь чётко и по делу. В [ОТВЕТ] — только живой ответ пользователю, без дублирования памяти.
+
+Если из сообщения нужно извлечь данные, добавь в конце ответа ОДНУ строку на каждый тип (только если применимо):
+[TASK] ГГГГ-ММ-ДД ЧЧ:ММ | Описание задачи или рутины
+[FINANCE] ГГГГ-ММ-ДД: сумма | категория | описание
+[HEALTH] ГГГГ-ММ-ДД: часы
+[MEMORY] факт для долгосрочной памяти
+[SCHEDULE] ГГГГ-ММ-ДД ЧЧ:ММ | Текст напоминания
+[QUESTION] Name: суть вопроса
+
+ПРАВИЛО ДЛЯ ПЕРЕСЛАННЫХ СООБЩЕНИЙ [QUESTION]:
+Если пересланное сообщение содержит вопрос или требует ответа, обязательно добавь тег:
+[QUESTION] Name: суть вопроса
+Где Name — это имя оригинального отправителя (из "Pavel forwarded a message from Name:"), а "суть вопроса" — краткое описание вопроса.
+
+Примеры распознавания:
+- "поспал 8 часов" → [HEALTH] {today_str}: 8
+- "потратил 450р на обед" → [FINANCE] {today_str}: 450 | еда | обед
+- "напомни в 21:00 позвонить маме" → [SCHEDULE] {today_str} 21:00 | Позвонить маме
+- "завтра в 9 утра тренировка" → [TASK] <дата> 09:00 | Тренировка
+- "Pavel forwarded a message from Ivan:\nWill you come to the meeting?" → [QUESTION] Ivan: Will you come to the meeting?
 
 Формат ответа:
 [ОТВЕТ]
@@ -412,10 +603,60 @@ S1get пишет: "{message.text}"
 
 app = Flask(__name__)
 
+def validate_telegram_init_data(init_data_str):
+    """
+    Validates Telegram WebApp initData and returns parsed user dict if valid and authorized, or None.
+    Uses HMAC-SHA256 with TELEGRAM_TOKEN as key.
+    """
+    if not init_data_str:
+        return None
+    try:
+        # Parse query string
+        parsed = urllib.parse.parse_qsl(init_data_str, keep_blank_values=True)
+        params = dict(parsed)
+        
+        if 'hash' not in params:
+            return None
+        
+        received_hash = params.pop('hash')
+        
+        # Sort remaining keys and build data-check-string
+        sorted_params = sorted(params.items())
+        data_check_string = "\n".join([f"{k}={v}" for k, v in sorted_params])
+        
+        # Calculate secret key: HMAC_SHA256("WebAppData", TELEGRAM_TOKEN)
+        secret_key = hmac.new(b"WebAppData", TELEGRAM_TOKEN.encode('utf-8'), hashlib.sha256).digest()
+        
+        # Calculate calculated_hash: HMAC_SHA256(secret_key, data_check_string)
+        calculated_hash = hmac.new(secret_key, data_check_string.encode('utf-8'), hashlib.sha256).hexdigest()
+        
+        if calculated_hash == received_hash:
+            user_json = params.get('user')
+            if user_json:
+                return json.loads(user_json)
+        return None
+    except Exception as e:
+        print(f"Error validating Telegram initData: {e}")
+        return None
+
+
 @app.route('/api/done', methods=['POST'])
 def mark_task_done():
     try:
+        # Extract init_data from header or payload
+        init_data = request.headers.get('X-TG-Init-Data')
         data = request.get_json(silent=True) or {}
+        if not init_data:
+            init_data = data.get('init_data')
+
+        if not init_data:
+            return jsonify({"success": False, "error": "Unauthorized: Missing initData"}), 403
+
+        # Validate init_data and verify user identity
+        user_data = validate_telegram_init_data(init_data)
+        if not user_data or user_data.get('id') != MY_TELEGRAM_ID:
+            return jsonify({"success": False, "error": "403 Forbidden: Unauthorized"}), 403
+
         task_idx = data.get('task_idx')
         if task_idx is None:
             return jsonify({"success": False, "error": "task_idx required"}), 400
@@ -435,8 +676,40 @@ def mark_task_done():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+
 @app.route('/')
 def home():
+    init_data = request.args.get('init_data')
+    if not init_data:
+        # Bootstrapper to extract WebApp initData client-side and reload
+        bootstrapper = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script src="https://telegram.org/js/telegram-web-app.js"></script>
+            <script>
+                window.onload = function() {
+                    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
+                        var initData = window.Telegram.WebApp.initData;
+                        window.location.href = "/?init_data=" + encodeURIComponent(initData);
+                    } else {
+                        document.body.innerHTML = '<h1 style="color: #ef4444; text-align: center; margin-top: 50px; font-family: sans-serif;">403 Forbidden: Telegram WebApp Only</h1>';
+                    }
+                }
+            </script>
+        </head>
+        <body style="background-color: #020617; color: white;">
+            <p style="text-align: center; margin-top: 50px; font-family: sans-serif;">Loading Time OS...</p>
+        </body>
+        </html>
+        """
+        return render_template_string(bootstrapper)
+
+    # Validate init_data and verify user identity
+    user_data = validate_telegram_init_data(init_data)
+    if not user_data or user_data.get('id') != MY_TELEGRAM_ID:
+        return "403 Forbidden: Unauthorized", 403
+
     today_label = datetime.now(msk_tz).strftime("%d.%m.%Y")
     today_tasks = get_today_tasks()
     total_spent, recent_expenses = get_monthly_expenses()
@@ -607,10 +880,14 @@ def home():
             checkbox.disabled = true;
             label.classList.add('line-through', 'opacity-50');
             try {
+                const initData = window.Telegram?.WebApp?.initData || '';
                 const res = await fetch('/api/done', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ task_idx: idx }),
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'X-TG-Init-Data': initData
+                    },
+                    body: JSON.stringify({ task_idx: idx, init_data: initData }),
                 });
                 const data = await res.json();
                 if (!data.success) throw new Error(data.error || 'Failed');

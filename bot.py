@@ -88,6 +88,33 @@ def send_dynamic_reminder(chat_id, task_text):
 def send_welcome(message):
     if not is_me(message): return
     bot.reply_to(message, "Привет! Твой личный мозг запущен. Я подключен к твоей папке в Google Диске и Obsidian!")
+# === КОМАНДА ЗАПИСИ РАСХОДОВ ===
+@bot.message_handler(commands=['spent'])
+def track_expense(message):
+    if not is_me(message): return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "Укажи сумму и категорию. Пример: `/spent 500 пицца`")
+            return
+        
+        amount = args[1]
+        desc = " ".join(args[2:]) if len(args) > 2 else "Расход"
+        today_str = datetime.now(msk_tz).strftime("%Y-%m-%d")
+        
+        # Читаем старые финансы, дописываем новую строчку
+        try:
+            current_finance = read_file_from_drive("Finance.md")
+        except:
+            current_finance = ""
+            
+        new_finance = current_finance.strip() + f"\n* {today_str}: {amount} | {desc}"
+        write_file_to_drive("Finance.md", new_finance.strip())
+        
+        bot.reply_to(message, f"💸 **Расход записан!**\n\n> Сумма: {amount} ₽\n> Описание: {desc}\nВнесено в твой Obsidian `Finance.md`!")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка записи расхода: {e}")
 
 # Команда записи сна в Obsidian
 @bot.message_handler(commands=['sleep'])
@@ -215,6 +242,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
+    # 1. Читаем активные задачи из Memory.md
     try:
         content = read_file_from_drive("Memory.md")
         lines = content.split("\n")
@@ -226,23 +254,60 @@ def home():
     except Exception as e:
         todo_list = [f"Ошибка задач: {e}"]
 
+    # 2. Читаем и суммируем расходы из Finance.md
+    try:
+        finance_content = read_file_from_drive("Finance.md")
+        finance_lines = [l.strip() for l in finance_content.split("\n") if l.strip()]
+        total_spent = 0
+        for line in finance_lines:
+            if ":" in line:
+                val_part = line.split(":")[-1].strip()
+                num_part = val_part.split("|")[0].strip()
+                try:
+                    total_spent += int(num_part)
+                except:
+                    pass
+    except Exception as e:
+        total_spent = 0
+
+    # 3. Читаем данные сна для графика (последние 7 записей)
+    sleep_data = []
+    sleep_labels = []
+    last_sleep = "0"
     try:
         health_content = read_file_from_drive("Health.md")
         health_lines = [l.strip() for l in health_content.split("\n") if l.strip()]
         if health_lines:
             last_line = health_lines[-1]
-            sleep_hours = last_line.split(":")[-1].strip()
-        else:
-            sleep_hours = "0"
+            last_sleep = last_line.split(":")[-1].strip()
+            
+            # Собираем последние 7 дней для графика
+            for line in health_lines[-7:]:
+                if ":" in line:
+                    date_part = line.split(":")[0].replace("*", "").strip()
+                    val_part = line.split(":")[-1].strip()
+                    try:
+                        formatted_date = datetime.strptime(date_part, "%Y-%m-%d").strftime("%d.%m")
+                    except:
+                        formatted_date = date_part
+                    sleep_data.append(float(val_part))
+                    sleep_labels.append(formatted_date)
     except Exception as e:
-        sleep_hours = "Ошибка"
+        sleep_data = [0]
+        sleep_labels = ["Нет данных"]
 
+    if not sleep_data:
+        sleep_data = [0]
+        sleep_labels = ["Нет данных"]
+
+    # 4. Считаем дни до дедлайна
     try:
         target_date = datetime(2026, 7, 25, tzinfo=msk_tz)
         days_left = (target_date.date() - datetime.now(msk_tz).date()).days
     except:
         days_left = "?"
 
+    # Красивый HTML-шаблон Дашборда (с неоновым графиком сна и бюджетом!)
     html_template = """
     <!DOCTYPE html>
     <html lang="ru">
@@ -251,6 +316,7 @@ def home():
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <title>Второй Мозг</title>
         <script src="https://cdn.tailwindcss.com"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     </head>
     <body class="bg-slate-950 text-slate-100 font-sans p-4 min-h-screen select-none">
         <div class="max-w-md mx-auto space-y-4">
@@ -276,6 +342,14 @@ def home():
                 <p class="text-[10px] text-slate-400 mt-2">Критический дедлайн: 25 июля 2026 г.</p>
             </div>
 
+            <!-- График тренда сна -->
+            <div class="bg-slate-900 p-4 rounded-2xl border border-slate-800">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">📈 Тренд сна (последние 7 дней)</h2>
+                <div class="h-28">
+                    <canvas id="sleepChart"></canvas>
+                </div>
+            </div>
+
             <!-- Задачи из Obsidian -->
             <div class="bg-slate-900 p-4 rounded-2xl border border-slate-800">
                 <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 flex items-center">📋 Задачи из Obsidian</h2>
@@ -295,11 +369,11 @@ def home():
             <div class="grid grid-cols-2 gap-4">
                 <div class="bg-slate-900 p-4 rounded-2xl border border-slate-800 flex flex-col justify-between h-28">
                     <span class="text-[10px] font-bold text-slate-400 uppercase">Бюджет</span>
-                    <span class="text-xl font-extrabold text-emerald-400 mt-1">1 500 ₽</span>
-                    <span class="text-[9px] text-slate-500">Вклад (Альфа-Банк)</span>
+                    <span class="text-xl font-extrabold text-emerald-400 mt-1">{{ total_spent }} ₽</span>
+                    <span class="text-[9px] text-slate-500">Расходы за месяц</span>
                 </div>
                 <div class="bg-slate-900 p-4 rounded-2xl border border-slate-800 flex flex-col justify-between h-28">
-                    <span class="text-[10px] font-bold text-slate-400 uppercase">Сон (Часы)</span>
+                    <span class="text-[10px] font-bold text-slate-400 uppercase">Последний Сон</span>
                     <span class="text-xl font-extrabold text-indigo-400 mt-1">{{ sleep_hours }} ч.</span>
                     <span class="text-[9px] text-slate-500">Показатель из Obsidian</span>
                 </div>
@@ -307,10 +381,39 @@ def home():
             
             <p class="text-center text-[10px] text-slate-600">Синхронизировано с Obsidian & Google Drive</p>
         </div>
+
+        <script>
+            const ctx = document.getElementById('sleepChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: {{ sleep_labels|tojson }},
+                    datasets: [{
+                        data: {{ sleep_data|tojson }},
+                        borderColor: 'rgb(99, 102, 241)',
+                        backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                        tension: 0.3,
+                        fill: true,
+                        borderWidth: 2,
+                        pointBackgroundColor: 'rgb(99, 102, 241)',
+                        pointRadius: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 9 } } },
+                        y: { grid: { color: 'rgba(148, 163, 184, 0.05)' }, ticks: { color: '#94a3b8', font: { size: 9 } } }
+                    }
+                }
+            });
+        </script>
     </body>
     </html>
     """
-    return render_template_string(html_template, tasks=todo_list, days_left=days_left, sleep_hours=sleep_hours)
+    return render_template_string(html_template, tasks=todo_list, days_left=days_left, sleep_hours=last_sleep, total_spent=total_spent, sleep_data=sleep_data, sleep_labels=sleep_labels)
 
 # Запуск веб-сервера
 threading.Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))).start()

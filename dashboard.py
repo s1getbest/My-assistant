@@ -3,7 +3,7 @@ import hashlib
 import json
 import urllib.parse
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, render_template_string
 import config
 from bot_instance import bot
 import telebot

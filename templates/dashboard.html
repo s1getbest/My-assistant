@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Time OS</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { -webkit-tap-highlight-color: transparent; }
+        .tab-panel { animation: fadeIn .2s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+        .timeline-line { background: linear-gradient(180deg, #6366f1 0%, #312e81 100%); }
+        .nav-active { color: #818cf8 !important; }
+        .nav-active .nav-dot { opacity: 1; transform: scale(1); }
+        .nav-dot { opacity: 0; transform: scale(0); transition: all .2s; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen pb-24">
+
+    <header class="sticky top-0 z-20 bg-slate-950/90 backdrop-blur border-b border-slate-800/80 px-4 py-3">
+        <div class="max-w-md mx-auto flex items-center justify-between">
+            <div>
+                <h1 class="text-sm font-bold tracking-wide">Time OS</h1>
+                <p class="text-[10px] text-indigo-400">{{ today_label }}</p>
+            </div>
+            <div class="w-9 h-9 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold shadow-lg shadow-indigo-500/30">ПВ</div>
+        </div>
+    </header>
+
+    <main class="max-w-md mx-auto px-4 pt-4 space-y-4">
+
+        <!-- TAB 1: TASKS -->
+        <div id="tab-tasks" class="tab-panel">
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">📋 Сегодня</h2>
+                {% if today_tasks %}
+                <div class="relative pl-6 space-y-4">
+                    <div class="absolute left-[7px] top-2 bottom-2 w-0.5 timeline-line rounded-full opacity-60"></div>
+                    {% for task in today_tasks %}
+                    <div class="relative flex items-start gap-3">
+                        <div class="absolute -left-6 top-1 w-3.5 h-3.5 rounded-full border-2 {{ 'border-emerald-500 bg-emerald-500/20' if task.done else 'border-indigo-500 bg-indigo-500/30' }} z-10"></div>
+                        <div class="flex-1 min-w-0 bg-slate-950/60 rounded-xl p-3 border border-slate-800/80">
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="text-[10px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">{{ task.time }}</span>
+                                {% if task.done %}
+                                <span class="text-[9px] text-emerald-500 uppercase font-bold">Done</span>
+                                {% endif %}
+                            </div>
+                            {% if not task.done and task.idx is not none %}
+                            <label class="flex items-start gap-2.5 cursor-pointer group">
+                                <input type="checkbox"
+                                    class="task-check mt-0.5 w-4 h-4 rounded accent-indigo-500 shrink-0"
+                                    data-idx="{{ task.idx }}"
+                                    onchange="completeTask(this)">
+                                <span class="task-label text-sm leading-snug group-hover:text-indigo-200 transition-colors">{{ task.text }}</span>
+                            </label>
+                            {% else %}
+                            <p class="text-sm {{ 'line-through opacity-40' if task.done else '' }}">{{ task.text }}</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-sm text-slate-500 text-center py-8">Нет задач на сегодня 🎉</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- TAB 2: FINANCE -->
+        <div id="tab-finance" class="tab-panel hidden">
+            <div class="bg-gradient-to-br from-emerald-950/40 to-slate-900 rounded-2xl border border-emerald-500/20 p-5 mb-4">
+                <p class="text-[10px] font-bold text-emerald-400/80 uppercase tracking-wider">Расходы за месяц</p>
+                <p class="text-4xl font-extrabold text-emerald-400 mt-1">{{ total_spent }} <span class="text-lg">₽</span></p>
+            </div>
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">💸 Последние траты</h2>
+                {% if recent_expenses %}
+                <ul class="space-y-2">
+                    {% for exp in recent_expenses %}
+                    <li class="flex items-center justify-between bg-slate-950/50 rounded-xl p-3 border border-slate-800/60">
+                        <div class="min-w-0">
+                            <p class="text-sm truncate">{{ exp.description }}</p>
+                            <p class="text-[10px] text-slate-500">{{ exp.category }} · {{ exp.date }}</p>
+                        </div>
+                        <span class="text-sm font-bold text-emerald-400 shrink-0 ml-2">−{{ exp.amount }} ₽</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="text-sm text-slate-500 text-center py-6">Нет записей</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- TAB 3: HEALTH -->
+        <div id="tab-health" class="tab-panel hidden">
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Последний сон</p>
+                    <p class="text-2xl font-extrabold text-indigo-400 mt-1">{{ last_sleep }} <span class="text-sm">ч</span></p>
+                </div>
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (7д)</p>
+                    <p class="text-2xl font-extrabold text-indigo-300 mt-1" id="avgSleep">—</p>
+                </div>
+            </div>
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🌙 Тренд сна</h2>
+                <div class="h-44">
+                    <canvas id="sleepChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Bottom Nav -->
+    <nav class="fixed bottom-0 inset-x-0 z-30 bg-slate-950/95 backdrop-blur border-t border-slate-800">
+        <div class="max-w-md mx-auto flex justify-around py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+            <button onclick="switchTab('tasks')" id="nav-tasks" class="nav-btn nav-active flex flex-col items-center gap-0.5 px-6 py-1 text-slate-500 transition-colors">
+                <span class="text-xl">📋</span>
+                <span class="text-[9px] font-semibold uppercase tracking-wide">Tasks</span>
+                <span class="nav-dot w-1 h-1 rounded-full bg-indigo-400"></span>
+            </button>
+            <button onclick="switchTab('finance')" id="nav-finance" class="nav-btn flex flex-col items-center gap-0.5 px-6 py-1 text-slate-500 transition-colors">
+                <span class="text-xl">💸</span>
+                <span class="text-[9px] font-semibold uppercase tracking-wide">Finance</span>
+                <span class="nav-dot w-1 h-1 rounded-full bg-indigo-400"></span>
+            </button>
+            <button onclick="switchTab('health')" id="nav-health" class="nav-btn flex flex-col items-center gap-0.5 px-6 py-1 text-slate-500 transition-colors">
+                <span class="text-xl">🌙</span>
+                <span class="text-[9px] font-semibold uppercase tracking-wide">Health</span>
+                <span class="nav-dot w-1 h-1 rounded-full bg-indigo-400"></span>
+            </button>
+        </div>
+    </nav>
+
+    <script>
+        if (window.Telegram?.WebApp) {
+            Telegram.WebApp.ready();
+            Telegram.WebApp.expand();
+            document.body.style.backgroundColor = '#020617';
+        }
+
+        const TABS = ['tasks', 'finance', 'health'];
+        let chartInstance = null;
+
+        function switchTab(name) {
+            TABS.forEach(t => {
+                document.getElementById('tab-' + t).classList.toggle('hidden', t !== name);
+                document.getElementById('nav-' + t).classList.toggle('nav-active', t === name);
+            });
+            if (name === 'health' && !chartInstance) initChart();
+        }
+
+        async function completeTask(checkbox) {
+            const idx = parseInt(checkbox.dataset.idx, 10);
+            const label = checkbox.closest('label').querySelector('.task-label');
+            checkbox.disabled = true;
+            label.classList.add('line-through', 'opacity-50');
+            try {
+                const initData = window.Telegram?.WebApp?.initData || '';
+                const res = await fetch('/api/done', {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'X-TG-Init-Data': initData
+                    },
+                    body: JSON.stringify({ task_idx: idx, init_data: initData }),
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Failed');
+            } catch (e) {
+                checkbox.checked = false;
+                checkbox.disabled = false;
+                label.classList.remove('line-through', 'opacity-50');
+            }
+        }
+
+        function initChart() {
+            const sleepData = {{ sleep_data|tojson }};
+            const sleepLabels = {{ sleep_labels|tojson }};
+            const valid = sleepData.filter(v => v > 0);
+            if (valid.length) {
+                const avg = (valid.reduce((a, b) => a + b, 0) / valid.length).toFixed(1);
+                document.getElementById('avgSleep').textContent = avg + ' ч';
+            }
+
+            const ctx = document.getElementById('sleepChart').getContext('2d');
+            const neonGradient = ctx.createLinearGradient(0, 0, 0, 176);
+            neonGradient.addColorStop(0, 'rgba(129, 140, 248, 0.35)');
+            neonGradient.addColorStop(1, 'rgba(129, 140, 248, 0)');
+
+            const neonGlow = {
+                id: 'neonGlow',
+                beforeDatasetsDraw(chart) {
+                    chart.ctx.save();
+                    chart.ctx.shadowColor = 'rgba(129, 140, 248, 0.9)';
+                    chart.ctx.shadowBlur = 14;
+                },
+                afterDatasetsDraw(chart) { chart.ctx.restore(); },
+            };
+
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: sleepLabels,
+                    datasets: [{
+                        data: sleepData,
+                        borderColor: '#818cf8',
+                        backgroundColor: neonGradient,
+                        tension: 0.4,
+                        fill: true,
+                        borderWidth: 2.5,
+                        pointBackgroundColor: '#c7d2fe',
+                        pointBorderColor: '#818cf8',
+                        pointBorderWidth: 2,
+                        pointRadius: 4,
+                    }],
+                },
+                plugins: [neonGlow],
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 9 } } },
+                        y: { min: 0, grid: { color: 'rgba(129, 140, 248, 0.08)' }, ticks: { color: '#94a3b8', font: { size: 9 }, stepSize: 2 } },
+                    },
+                },
+            });
+        }
+    </script>
+</body>
+</html>

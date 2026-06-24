@@ -6,13 +6,19 @@ import config
 from bot_instance import bot
 from key_manager import key_manager
 from drive_service import (
-    read_file_from_drive,
     append_line_to_drive,
+    delete_line_from_task_file,
+    edit_line_in_task_file,
+    list_markdown_files,
+    read_file_from_drive,
     write_file_to_drive,
 )
 
 # === REGEX CONSTANTS ===
-TAG_LINE_RE = re.compile(r'^\[(TASK|FINANCE|HEALTH|MEMORY|SCHEDULE|QUESTION|MOOD)\]\s*(.+)$', re.MULTILINE)
+TAG_LINE_RE = re.compile(
+    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|FINANCE|HEALTH|MEMORY|SCHEDULE|QUESTION|MOOD)\]\s*(.+)$',
+    re.MULTILINE
+)
 TASK_TIME_RE = re.compile(r'(\d{2}:\d{2})\s*\|\s*(.+)$')
 
 
@@ -40,13 +46,50 @@ def extract_reply(raw_text):
     return "\n".join(reply_lines).strip() or raw_text.strip()
 
 
+def get_extraction_rules(today_str):
+    return f"""Если из сообщения нужно извлечь данные, добавь в конце ответа ОДНУ строку на каждый тип (только если применимо):
+[TASK_ADD] ГГГГ-ММ-ДД ЧЧ:ММ | Описание задачи или рутины
+[TASK_DEL] text_to_find
+[TASK_EDIT] text_to_find || ГГГГ-ММ-ДД ЧЧ:ММ | Новое описание задачи
+[FINANCE] ГГГГ-ММ-ДД: сумма | категория | описание
+[HEALTH] ГГГГ-ММ-ДД: часы
+[MEMORY] факт для долгосрочной памяти
+[SCHEDULE] ГГГГ-ММ-ДД ЧЧ:ММ | Текст напоминания
+[QUESTION] Name: суть вопроса
+
+Если пользователь просит удалить задачу, используй [TASK_DEL] и передай уникальный фрагмент текста для поиска.
+Если пользователь просит изменить задачу, используй [TASK_EDIT] в формате `старый_текст || новая_строка`.
+Если пользователь просит напомнить заранее, например "за 1 час" или "за 1 день" до события, вычисли точную дату и время напоминания и выдай [SCHEDULE] с уже рассчитанным временем.
+
+Примеры распознавания:
+- "поспал 8 часов" → [HEALTH] {today_str}: 8
+- "потратил 450р на обед" → [FINANCE] {today_str}: 450 | еда | обед
+- "напомни в 21:00 позвонить маме" → [SCHEDULE] {today_str} 21:00 | Позвонить маме
+- "завтра в 9 утра тренировка" → [TASK_ADD] <дата> 09:00 | Тренировка
+- "удали задачу созвон с Димой" → [TASK_DEL] созвон с Димой
+- "перенеси тренировку на завтра в 8" → [TASK_EDIT] тренировка || <новая дата> 08:00 | Тренировка
+"""
+
+
+def build_task_line(payload):
+    return f"* [ ] {payload.strip()}"
+
+
 def apply_gemini_tags(tags):
     for tag_type, payload in tags:
         if not payload:
             continue
         try:
-            if tag_type == "TASK":
-                append_line_to_drive("Tasks.md", f"* [ ] {payload}")
+            if tag_type == "TASK_ADD":
+                append_line_to_drive("Tasks.md", build_task_line(payload))
+            elif tag_type == "TASK_DEL":
+                delete_line_from_task_file(payload)
+            elif tag_type == "TASK_EDIT" and "||" in payload:
+                search_text, new_line_text = payload.split("||", 1)
+                edit_line_in_task_file(
+                    search_text.strip(),
+                    build_task_line(new_line_text)
+                )
             elif tag_type == "FINANCE":
                 append_line_to_drive("Finance.md", f"* {payload}")
             elif tag_type == "HEALTH":
@@ -65,14 +108,12 @@ def apply_gemini_tags(tags):
                 dt_str, task_text = dt_str.strip(), task_text.strip()
                 run_date = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
                 run_date = config.msk_tz.localize(run_date)
-                
-                # Import scheduler and job dynamically to prevent circular dependencies
-                from scheduler_jobs import scheduler, send_dynamic_reminder
-                scheduler.add_job(
-                    send_dynamic_reminder,
-                    'date',
-                    run_date=run_date,
-                    args=[config.MY_TELEGRAM_ID, task_text],
+
+                from scheduler_jobs import schedule_reminder_job
+                schedule_reminder_job(config.MY_TELEGRAM_ID, task_text, run_date)
+                append_line_to_drive(
+                    "Tasks.md",
+                    f"* [ ] {dt_str} | ⏰ REMINDER: {task_text}"
                 )
         except Exception as e:
             print(f"[Tag Apply] Tag apply error [{tag_type}]: {e}")
@@ -220,6 +261,7 @@ Act as an empathetic listener and coach. Respond with a short, supportive reply.
 [MOOD] score/10
 """
         else:
+            extraction_rules = get_extraction_rules(today_str)
             prompt = f"""Текущее время в Москве: {now_msk}
 Сегодняшняя дата: {today_str}
 
@@ -233,19 +275,7 @@ Act as an empathetic listener and coach. Respond with a short, supportive reply.
 
 Ответь чётко и по делу. В [ОТВЕТ] — только живой ответ пользователю, без дублирования памяти.
 
-Если из сообщения нужно извлечь данные, добавь в конце ответа ОДНУ строку на каждый тип (только если применимо):
-[TASK] ГГГГ-ММ-ДД ЧЧ:ММ | Описание задачи или рутины
-[FINANCE] ГГГГ-ММ-ДД: сумма | категория | описание
-[HEALTH] ГГГГ-ММ-ДД: часы
-[MEMORY] факт для долгосрочной памяти
-[SCHEDULE] ГГГГ-ММ-ДД ЧЧ:ММ | Текст напоминания
-[QUESTION] Name: суть вопроса
-
-Примеры распознавания:
-- "поспал 8 часов" → [HEALTH] {today_str}: 8
-- "потратил 450р на обед" → [FINANCE] {today_str}: 450 | еда | обед
-- "напомни в 21:00 позвонить маме" → [SCHEDULE] {today_str} 21:00 | Позвонить маме
-- "завтра в 9 утра тренировка" → [TASK] <дата> 09:00 | Тренировка
+{extraction_rules}
 
 Формат ответа:
 [ОТВЕТ]
@@ -292,13 +322,15 @@ def handle_photo(message):
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
         
         caption = message.caption or ""
+        extraction_rules = get_extraction_rules(today_str)
 
         prompt = f"""Текущее время в Москве: {now_msk}
 Сегодняшняя дата: {today_str}
 
 Пользователь прислал изображение. Вот его описание/подпись (если есть): "{caption}"
 
-Analyze this image. If it's a receipt, calculate the total and output `[FINANCE] YYYY-MM-DD: amount | category | description`. If it's handwritten notes or a whiteboard, extract actionable items as `[TASK] YYYY-MM-DD HH:MM | Task`. If it's an article/screenshot, summarize it as `[MEMORY] summary`.
+Analyze this image. If it's a receipt, calculate the total and output `[FINANCE] YYYY-MM-DD: amount | category | description`. If it's handwritten notes or a whiteboard, extract actionable items as `[TASK_ADD] YYYY-MM-DD HH:MM | Task`. If it's an article/screenshot, summarize it as `[MEMORY] summary`.
+{extraction_rules}
 
 Помимо тегов, напиши пользователю краткий содержательный ответ/комментарий. Начни свой ответ с [ОТВЕТ], чтобы отделить живой ответ от тегов.
 
@@ -340,20 +372,14 @@ def handle_inline_query(inline_query):
         text = inline_query.query.strip()
         now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+        extraction_rules = get_extraction_rules(today_str)
 
         prompt = f"""Текущее время в Москве: {now_msk}
 Сегодняшняя дата: {today_str}
 
 Пользователь отправил быструю заметку через Inline-режим: "{text}"
 
-Если из этой заметки нужно извлечь данные, добавь в ответ одну строку на каждый тип (только если применимо):
-[TASK] ГГГГ-ММ-ДД ЧЧ:ММ | Описание задачи или рутины
-[FINANCE] ГГГГ-ММ-ДД: сумма | категория | описание
-[HEALTH] ГГГГ-ММ-ДД: часы
-[MEMORY] факт для долгосрочной памяти
-[SCHEDULE] ГГГГ-ММ-ДД ЧЧ:ММ | Текст напоминания
-[QUESTION] Name: суть вопроса
-
+{extraction_rules}
 Пожалуйста, будь точен в распознавании. Никакого другого текста писать НЕ нужно, только теги с новой строки (если применимо).
 """
         response = key_manager.generate_content(
@@ -420,14 +446,12 @@ def handle_task_callback(call):
             import datetime
             delay_hours = 1 if "1h" in action else 24
             run_date = datetime.datetime.now(config.msk_tz) + datetime.timedelta(hours=delay_hours)
-            
-            # Import scheduler and job dynamically to prevent circular dependencies
-            from scheduler_jobs import scheduler, send_dynamic_reminder
-            scheduler.add_job(
-                send_dynamic_reminder,
-                'date',
-                run_date=run_date,
-                args=[config.MY_TELEGRAM_ID, task_text],
+
+            from scheduler_jobs import schedule_reminder_job
+            schedule_reminder_job(config.MY_TELEGRAM_ID, task_text, run_date)
+            append_line_to_drive(
+                "Tasks.md",
+                f"* [ ] {run_date.strftime('%Y-%m-%d %H:%M')} | ⏰ REMINDER: {task_text}"
             )
             bot.answer_callback_query(call.id, f"Отложено на {delay_hours} ч.")
             bot.send_message(call.message.chat.id, f"⏰ Напоминание **{task_text}** успешно отложено на {delay_hours} ч.", parse_mode="Markdown")
@@ -556,6 +580,62 @@ Write a comprehensive, deep, and structured analysis or answer in Russian langua
         bot.reply_to(message, f"Ошибка поиска по Второму Мозгу: {e}")
 
 
+@bot.message_handler(commands=['search'])
+def handle_global_search(message):
+    if not is_me(message):
+        return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            bot.reply_to(message, "Используй `/search запрос`.", parse_mode="Markdown")
+            return
+        query = args[1].strip()
+
+        files = list_markdown_files(limit=10)
+        if not files:
+            bot.reply_to(message, "Не удалось найти Markdown-файлы в Google Drive.")
+            return
+
+        collected_chunks = []
+        total_chars = 0
+        for file_meta in files:
+            filename = file_meta.get("name", "")
+            if not filename.endswith(".md"):
+                continue
+            content = read_file_from_drive(filename)
+            if not content:
+                continue
+            remaining = 50000 - total_chars
+            if remaining <= 0:
+                break
+            snippet = content[:remaining]
+            collected_chunks.append(f"[FILE: {filename}]\n{snippet}")
+            total_chars += len(snippet)
+
+        if not collected_chunks:
+            bot.reply_to(message, "Файлы найдены, но их содержимое пустое.")
+            return
+
+        notes_context = "\n\n".join(collected_chunks)
+        prompt = f"""You are the user's digital Second Brain. Answer the query: "{query}" using the provided Obsidian notes. Cite which file (.md) the information comes from.
+
+If the answer is uncertain, say so clearly. Reply in Russian and keep the answer structured and concise.
+
+Notes:
+---
+{notes_context}
+---
+"""
+        response = key_manager.generate_content(
+            model=config.MODEL_COMPLEX,
+            contents=prompt
+        )
+        bot.reply_to(message, response.text.strip())
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка глобального поиска: {e}")
+
+
 @bot.message_handler(func=lambda message: True)
 def chat_with_gemini(message):
     """
@@ -590,6 +670,7 @@ def chat_with_gemini(message):
             selected_model = config.MODEL_LITE
 
         print(f"[Model Router] Routing input (length={text_len}, forwarded={is_forwarded}) to model: {selected_model}")
+        extraction_rules = get_extraction_rules(today_str)
 
         prompt = f"""Текущее время в Москве: {now_msk}
 Сегодняшняя дата: {today_str}
@@ -603,13 +684,7 @@ S1get пишет: "{user_message_text}"
 
 Ответь чётко и по делу. В [ОТВЕТ] — только живой ответ пользователю, без дублирования памяти.
 
-Если из сообщения нужно извлечь данные, добавь в конце ответа ОДНУ строку на каждый тип (только если применимо):
-[TASK] ГГГГ-ММ-ДД ЧЧ:ММ | Описание задачи или рутины
-[FINANCE] ГГГГ-ММ-ДД: сумма | категория | описание
-[HEALTH] ГГГГ-ММ-ДД: часы
-[MEMORY] факт для долгосрочной памяти
-[SCHEDULE] ГГГГ-ММ-ДД ЧЧ:ММ | Текст напоминания
-[QUESTION] Name: суть вопроса
+{extraction_rules}
 
 ПРАВИЛО ДЛЯ ПЕРЕСЛАННЫХ СООБЩЕНИЙ [QUESTION]:
 Если пересланное сообщение содержит вопрос или требует ответа, обязательно добавь тег:
@@ -617,10 +692,6 @@ S1get пишет: "{user_message_text}"
 Где Name — это имя оригинального отправителя (из "Pavel forwarded a message from Name:"), а "суть вопроса" — краткое описание вопроса.
 
 Примеры распознавания:
-- "поспал 8 часов" → [HEALTH] {today_str}: 8
-- "потратил 450р на обед" → [FINANCE] {today_str}: 450 | еда | обед
-- "напомни в 21:00 позвонить маме" → [SCHEDULE] {today_str} 21:00 | Позвонить маме
-- "завтра в 9 утра тренировка" → [TASK] <дата> 09:00 | Тренировка
 - "Pavel forwarded a message from Ivan:\nWill you come to the meeting?" → [QUESTION] Ivan: Will you come to the meeting?
 
 Формат ответа:
@@ -654,6 +725,7 @@ def process_external_text(text):
 
         now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+        extraction_rules = get_extraction_rules(today_str)
 
         prompt = f"""Текущее время в Москве: {now_msk}
 Сегодняшняя дата: {today_str}
@@ -667,19 +739,7 @@ S1get пишет (через Siri/Shortcut): "{text}"
 
 Ответь чётко и по делу. В [ОТВЕТ] — только живой ответ пользователю, без дублирования памяти.
 
-Если из сообщения нужно извлечь данные, добавь в конце ответа ОДНУ строку на каждый тип (только если применимо):
-[TASK] ГГГГ-ММ-ДД ЧЧ:ММ | Описание задачи или рутины
-[FINANCE] ГГГГ-ММ-ДД: сумма | категория | описание
-[HEALTH] ГГГГ-ММ-ДД: часы
-[MEMORY] факт для долгосрочной памяти
-[SCHEDULE] ГГГГ-ММ-ДД ЧЧ:ММ | Текст напоминания
-[QUESTION] Name: суть вопроса
-
-Примеры распознавания:
-- "поспал 8 часов" → [HEALTH] {today_str}: 8
-- "потратил 450р на обед" → [FINANCE] {today_str}: 450 | еда | обед
-- "напомни в 21:00 позвонить маме" → [SCHEDULE] {today_str} 21:00 | Позвонить маме
-- "завтра в 9 утра тренировка" → [TASK] <дата> 09:00 | Тренировка
+{extraction_rules}
 
 Формат ответа:
 [ОТВЕТ]

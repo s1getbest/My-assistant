@@ -1,12 +1,95 @@
-from datetime import datetime
+import hashlib
+import re
+from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 import config
 from bot_instance import bot
 from key_manager import key_manager
-from drive_service import read_file_from_drive, write_file_to_drive, get_today_tasks, read_or_create_goals
+from drive_service import (
+    append_line_to_drive,
+    get_today_tasks,
+    read_file_from_drive,
+    read_or_create_goals,
+    write_file_to_drive,
+)
 
 # Initialize BackgroundScheduler with Moscow Timezone
 scheduler = BackgroundScheduler(timezone=config.msk_tz)
+TASK_LINE_RE = re.compile(r'^\s*[\*\-]?\s*\[(?P<status>[ xX])\]\s*(?P<body>.+)$')
+TASK_DATETIME_RE = re.compile(r'(?P<dt>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*\|\s*(?P<text>.+)$')
+
+
+def _normalize_run_date(run_date):
+    if run_date.tzinfo is None:
+        return config.msk_tz.localize(run_date)
+    return run_date.astimezone(config.msk_tz)
+
+
+def _clean_reminder_text(task_text):
+    return task_text.replace("⏰ REMINDER:", "", 1).strip()
+
+
+def _build_reminder_job_id(run_date, task_text):
+    raw = f"{run_date.strftime('%Y-%m-%d %H:%M')}|{task_text}"
+    digest = hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
+    return f"reminder_{digest}"
+
+
+def schedule_reminder_job(chat_id, task_text, run_date):
+    run_date = _normalize_run_date(run_date)
+    job_id = _build_reminder_job_id(run_date, task_text)
+    scheduler.add_job(
+        send_dynamic_reminder,
+        'date',
+        id=job_id,
+        replace_existing=True,
+        run_date=run_date,
+        args=[chat_id, task_text],
+        misfire_grace_time=300,
+    )
+    return job_id
+
+
+def restore_reminders_on_startup(bot_instance):
+    try:
+        now = datetime.now(config.msk_tz)
+        content = read_file_from_drive("Tasks.md")
+        if not content.strip():
+            return 0
+
+        restored_count = 0
+        for line in content.split("\n"):
+            match = TASK_LINE_RE.match(line.strip())
+            if not match or match.group("status").lower() != " ":
+                continue
+
+            body = match.group("body").strip()
+            dt_match = TASK_DATETIME_RE.search(body)
+            if not dt_match:
+                continue
+
+            task_text = dt_match.group("text").strip()
+            if "⏰ REMINDER:" not in task_text and "|" not in body:
+                continue
+
+            try:
+                run_date = config.msk_tz.localize(
+                    datetime.strptime(dt_match.group("dt"), "%Y-%m-%d %H:%M")
+                )
+            except ValueError:
+                continue
+
+            if run_date <= now:
+                continue
+
+            schedule_reminder_job(config.MY_TELEGRAM_ID, _clean_reminder_text(task_text), run_date)
+            restored_count += 1
+
+        print(f"[Scheduler] Restored {restored_count} reminders/tasks from Tasks.md on startup.")
+        return restored_count
+    except Exception as e:
+        print(f"[Scheduler] Reminder restore error: {e}")
+        return 0
 
 def send_dynamic_reminder(chat_id, task_text):
     """
@@ -105,8 +188,6 @@ def auto_archive_stale_tasks():
     Returns the number of archived tasks.
     """
     try:
-        import datetime
-        import re
         content = read_file_from_drive("Tasks.md")
         if not content.strip():
             return 0
@@ -116,8 +197,8 @@ def auto_archive_stale_tasks():
         stale_tasks = []
         
         date_pattern = re.compile(r'\d{4}-\d{2}-\d{2}')
-        now = datetime.datetime.now(config.msk_tz)
-        seven_days_ago = now - datetime.timedelta(days=7)
+        now = datetime.now(config.msk_tz)
+        seven_days_ago = now - timedelta(days=7)
         
         for line in lines:
             stripped = line.strip()
@@ -129,7 +210,7 @@ def auto_archive_stale_tasks():
                 m = date_pattern.search(stripped)
                 if m:
                     try:
-                        task_date = datetime.datetime.strptime(m.group(0), "%Y-%m-%d")
+                        task_date = datetime.strptime(m.group(0), "%Y-%m-%d")
                         task_date = config.msk_tz.localize(task_date)
                         if task_date < seven_days_ago:
                             stale_tasks.append(line)
@@ -258,9 +339,8 @@ def weekly_audit():
         # Anti-Burnout Auto-Archiver
         archived_count = auto_archive_stale_tasks()
         
-        import datetime
-        now = datetime.datetime.now(config.msk_tz)
-        dates = [(now - datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+        now = datetime.now(config.msk_tz)
+        dates = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
         
         tasks_content = read_file_from_drive("Tasks.md")
         finance_content = read_file_from_drive("Finance.md")

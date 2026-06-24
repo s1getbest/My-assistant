@@ -1,7 +1,7 @@
 import os
 import config
 from bot_instance import bot
-from scheduler_jobs import scheduler
+from scheduler_jobs import restore_reminders_on_startup, scheduler
 from dashboard import app
 
 # Import handlers to ensure all bot command & message routes are registered
@@ -19,6 +19,8 @@ if __name__ == "__main__":
     # === START SCHEDULER ===
     print("[Main] Starting Background Scheduler...")
     scheduler.start()
+    print("[Main] Restoring reminders from Tasks.md...")
+    restore_reminders_on_startup(bot)
     
     # === RUN FLASK APP ON MAIN THREAD ===
     # This prevents the container from exiting early on Render and loops synchronously

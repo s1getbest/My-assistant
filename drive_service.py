@@ -3,7 +3,7 @@ import time
 import threading
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
@@ -130,6 +130,63 @@ def append_line_to_drive(filename, line):
     except Exception as e:
         print(f"[Drive] Append error for {filename}: {e}")
         return False
+
+
+def delete_line_from_task_file(search_text):
+    try:
+        content = read_file_from_drive("Tasks.md")
+        if not content.strip():
+            return False
+        lines = content.split("\n")
+        filtered_lines = [line for line in lines if search_text not in line]
+        if filtered_lines == lines:
+            return False
+        write_file_to_drive("Tasks.md", "\n".join(filtered_lines).strip())
+        return True
+    except Exception as e:
+        print(f"[Drive] Delete task line error: {e}")
+        return False
+
+
+def edit_line_in_task_file(old_search_text, new_line_text):
+    try:
+        content = read_file_from_drive("Tasks.md")
+        if not content.strip():
+            return False
+        lines = content.split("\n")
+        updated = False
+        for idx, line in enumerate(lines):
+            if old_search_text in line:
+                lines[idx] = new_line_text
+                updated = True
+                break
+        if not updated:
+            return False
+        write_file_to_drive("Tasks.md", "\n".join(lines))
+        return True
+    except Exception as e:
+        print(f"[Drive] Edit task line error: {e}")
+        return False
+
+
+def list_markdown_files(limit=10):
+    try:
+        service = get_drive_service()
+        query = (
+            f"'{config.FOLDER_ID}' in parents and trashed = false "
+            "and name contains '.md'"
+        )
+        results = service.files().list(
+            q=query,
+            spaces='drive',
+            fields='files(id,name)',
+            pageSize=limit,
+            orderBy='modifiedTime desc'
+        ).execute()
+        return results.get('files', [])[:limit]
+    except Exception as e:
+        print(f"[Drive] Error listing markdown files: {e}")
+        return []
 
 
 # === DATA PARSING AND RETRIEVAL FUNCTIONS ===
@@ -279,7 +336,7 @@ def get_habit_completion_array():
         
         today = datetime.now(config.msk_tz)
         for i in range(13, -1, -1):
-            day = today - datetime.timedelta(days=i)
+            day = today - timedelta(days=i)
             day_str = day.strftime("%Y-%m-%d")
             day_label = day.strftime("%d.%m")
             
@@ -322,7 +379,7 @@ def get_habit_completion_array():
         print(f"[Parser] Habit completion error: {e}")
         today = datetime.now(config.msk_tz)
         for i in range(13, -1, -1):
-            day = today - datetime.timedelta(days=i)
+            day = today - timedelta(days=i)
             habit_data.append({
                 "date": day.strftime("%Y-%m-%d"),
                 "label": day.strftime("%d.%m"),

@@ -1,4 +1,5 @@
 import threading
+import time
 from google import genai
 import config
 
@@ -38,15 +39,19 @@ class APIKeyManager:
 
     def generate_content(self, model, contents, **kwargs):
         """
-        Wrapper around client.models.generate_content that catches 429 / resource exhausted
-        errors, rotates keys thread-safely, and retries the request up to 3 times.
+        Wrapper around client.models.generate_content that manages:
+        - Thread-safe key rotation on 429 Rate Limit/Quota errors.
+        - Automatic fallback from MODEL_COMPLEX to MODEL_LITE on 503 / 5xx errors.
+        - Retries up to 3 times total.
         """
+        current_model = model
         last_error = None
+        
         for attempt in range(3):
             try:
                 client = self.get_client()
                 response = client.models.generate_content(
-                    model=model,
+                    model=current_model,
                     contents=contents,
                     **kwargs
                 )
@@ -54,14 +59,58 @@ class APIKeyManager:
             except Exception as e:
                 last_error = e
                 err_msg = str(e)
+                
                 # Check for standard Google 429 or RESOURCE_EXHAUSTED / quota error
                 is_quota_issue = "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower()
-                if is_quota_issue and len(self._keys) > 1:
-                    print(f"[KeyManager] Rate limit / Quota issue detected. Attempt {attempt + 1}/3. Rotating API key.")
-                    self.rotate_key()
+                
+                # Check for 503 / 5xx / Unavailable / Internal Server Error
+                is_503_or_5xx = (
+                    "503" in err_msg or 
+                    "500" in err_msg or 
+                    "502" in err_msg or 
+                    "504" in err_msg or 
+                    "UNAVAILABLE" in err_msg or 
+                    "INTERNAL" in err_msg or 
+                    "service unavailable" in err_msg.lower() or
+                    "internal server error" in err_msg.lower() or
+                    (hasattr(e, 'code') and str(getattr(e, 'code')).startswith('5')) or
+                    (hasattr(e, 'status_code') and str(getattr(e, 'status_code')).startswith('5'))
+                )
+                
+                if is_quota_issue:
+                    if len(self._keys) > 1:
+                        print(f"[KeyManager] Rate limit / Quota issue (429) detected. Attempt {attempt + 1}/3. Rotating API key.")
+                        self.rotate_key()
+                        continue
+                    else:
+                        print(f"[KeyManager] Rate limit (429) hit, but only 1 key available. Raising error.")
+                        raise e
+                        
+                elif is_503_or_5xx:
+                    if current_model == config.MODEL_COMPLEX:
+                        print(f"[AI] 503/5xx error with {config.MODEL_COMPLEX}, falling back to MODEL_LITE")
+                        # Try the request immediately using MODEL_LITE
+                        try:
+                            print(f"[KeyManager] Retrying immediately with fallback model: {config.MODEL_LITE}")
+                            response = client.models.generate_content(
+                                model=config.MODEL_LITE,
+                                contents=contents,
+                                **kwargs
+                            )
+                            # Fallback succeeded, change our tracking model and return the result
+                            current_model = config.MODEL_LITE
+                            return response
+                        except Exception as fallback_e:
+                            print(f"[KeyManager] Fallback to {config.MODEL_LITE} also failed: {fallback_e}")
+                            last_error = fallback_e
+                            # Let the outer loop retry with the next key/attempt
+                    else:
+                        print(f"[KeyManager] 503/5xx error on MODEL_LITE or non-complex model: {err_msg}. Retrying in next attempt...")
+                        time.sleep(1)
                 else:
-                    print(f"[KeyManager] Direct API error (no rotation): {err_msg}")
+                    print(f"[KeyManager] Direct API error (no rotation/no fallback): {err_msg}")
                     raise e
+                    
         raise last_error
 
 # Singleton key manager instance

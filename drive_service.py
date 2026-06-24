@@ -12,18 +12,14 @@ import config
 
 # === GOOGLE DRIVE CREDENTIALS INITIALIZATION ===
 _drive_creds = None
-_GOOGLE_SCOPES = [
-    "https://www.googleapis.com/auth/drive",
-    "https://www.googleapis.com/auth/calendar.events",
-]
 try:
     if config.GOOGLE_TOKEN_JSON:
         token_data = json.loads(config.GOOGLE_TOKEN_JSON)
         _drive_creds = Credentials.from_authorized_user_info(
             token_data, 
-            scopes=_GOOGLE_SCOPES
+            scopes=["https://www.googleapis.com/auth/drive"]
         )
-        print("[Drive] Successfully authorized with Google Drive/Calendar credentials!")
+        print("[Drive] Successfully authorized with Google Drive credentials!")
     else:
         print("[Drive] Warning: GOOGLE_TOKEN_JSON environment variable is empty.")
 except Exception as e:
@@ -34,12 +30,6 @@ def get_drive_service():
     if _drive_creds is None:
         raise RuntimeError("Google Drive credentials not initialized.")
     return build('drive', 'v3', credentials=_drive_creds)
-
-
-def get_calendar_service():
-    if _drive_creds is None:
-        raise RuntimeError("Google credentials not initialized.")
-    return build('calendar', 'v3', credentials=_drive_creds)
 
 
 # === GOOGLE DRIVE CACHING ===
@@ -237,32 +227,6 @@ def mark_task_done_by_token(task_token):
         return None
     except Exception as e:
         print(f"[Drive] Mark task done by token error: {e}")
-        return None
-
-
-def add_event_to_calendar(task_text, datetime_obj):
-    try:
-        event_start = datetime_obj
-        if event_start.tzinfo is None:
-            event_start = config.msk_tz.localize(event_start)
-        else:
-            event_start = event_start.astimezone(config.msk_tz)
-        event_end = event_start + timedelta(hours=1)
-        calendar_service = get_calendar_service()
-        event = {
-            "summary": task_text,
-            "start": {
-                "dateTime": event_start.isoformat(),
-                "timeZone": "Europe/Moscow",
-            },
-            "end": {
-                "dateTime": event_end.isoformat(),
-                "timeZone": "Europe/Moscow",
-            },
-        }
-        return calendar_service.events().insert(calendarId="primary", body=event).execute()
-    except Exception as e:
-        print(f"[Calendar] Add event error: {e}")
         return None
 
 

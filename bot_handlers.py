@@ -6,7 +6,6 @@ import config
 from bot_instance import bot
 from key_manager import key_manager
 from drive_service import (
-    add_event_to_calendar,
     append_line_to_drive,
     delete_line_from_task_file,
     edit_line_in_task_file,
@@ -123,7 +122,6 @@ def apply_gemini_tags(tags):
 
                 from scheduler_jobs import schedule_reminder_job
                 schedule_reminder_job(config.MY_TELEGRAM_ID, task_text, run_date, task_line=task_line)
-                add_event_to_calendar(task_text, run_date)
                 append_line_to_drive("Tasks.md", task_line)
         except Exception as e:
             print(f"[Tag Apply] Tag apply error [{tag_type}]: {e}")

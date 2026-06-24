@@ -225,6 +225,10 @@
         let chartInstance = null;
         let financeChartInstance = null;
 
+        function getTelegramInitData() {
+            return window.Telegram?.WebApp?.initData || '';
+        }
+
         function switchTab(name) {
             TABS.forEach(t => {
                 document.getElementById('tab-' + t).classList.toggle('hidden', t !== name);
@@ -284,14 +288,14 @@
             label.classList.add('line-through', 'opacity-50');
             
             try {
-                const initData = window.Telegram?.WebApp?.initData || '';
+                const initData = getTelegramInitData();
                 const res = await fetch('/api/done', {
                     method: 'POST',
                     headers: { 
                         'Content-Type': 'application/json',
-                        'X-TG-Init-Data': initData
+                        'Authorization': initData
                     },
-                    body: JSON.stringify({ task_idx: idx, init_data: initData }),
+                    body: JSON.stringify({ task_idx: idx }),
                 });
                 const data = await res.json();
                 if (!data.success) throw new Error(data.error || 'Failed');
@@ -330,7 +334,12 @@
             btn.innerHTML = '<span>Выбираю... 🔮</span>';
             
             try {
-                const res = await fetch('/api/now');
+                const initData = getTelegramInitData();
+                const res = await fetch('/api/now', {
+                    headers: {
+                        'Authorization': initData
+                    }
+                });
                 const data = await res.json();
                 if (data.success) {
                     resultText.textContent = data.task;

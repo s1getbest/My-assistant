@@ -1,9 +1,8 @@
 import hmac
 import hashlib
-import json
 import urllib.parse
-from datetime import datetime
-from flask import Flask, request, jsonify, render_template, render_template_string
+from datetime import datetime, timedelta
+from flask import Flask, request, jsonify, render_template
 import config
 
 from bot_instance import bot
@@ -24,71 +23,37 @@ from drive_service import (
 app = Flask(__name__)
 
 
-def validate_telegram_init_data(init_data_str):
-    """
-    Validates Telegram WebApp initData and returns parsed user dict if valid and authorized, or None.
-    Uses HMAC-SHA256 with TELEGRAM_TOKEN as key.
-    """
-    if not init_data_str or not isinstance(init_data_str, str):
-        return None
+def validate_telegram_data(init_data):
+    if not init_data:
+        return False
     try:
-        if not config.TELEGRAM_TOKEN:
-            print("[Security] Warning: TELEGRAM_TOKEN is not configured.")
-            return None
-
-        # Parse query string
-        parsed = urllib.parse.parse_qsl(init_data_str, keep_blank_values=True)
-        params = dict(parsed)
-        
-        if 'hash' not in params:
-            return None
-        
-        received_hash = params.pop('hash')
-        
-        # Sort remaining keys and build data-check-string
-        sorted_params = sorted(params.items())
-        data_check_string = "\n".join([f"{k}={v}" for k, v in sorted_params])
-        
-        # Calculate secret key: HMAC_SHA256("WebAppData", TELEGRAM_TOKEN)
+        vals = {
+            k: urllib.parse.unquote(v)
+            for k, v in [s.split('=', 1) for s in init_data.split('&')]
+        }
+        if 'hash' not in vals:
+            return False
+        data_check_string = '\n'.join(
+            f"{k}={v}" for k, v in sorted(vals.items()) if k != 'hash'
+        )
         secret_key = hmac.new(
-            b"WebAppData", 
-            config.TELEGRAM_TOKEN.encode('utf-8'), 
+            "WebAppData".encode(),
+            config.TELEGRAM_TOKEN.encode(),
             hashlib.sha256
         ).digest()
-        
-        # Calculate calculated_hash: HMAC_SHA256(secret_key, data_check_string)
-        calculated_hash = hmac.new(
-            secret_key, 
-            data_check_string.encode('utf-8'), 
-            hashlib.sha256
-        ).hexdigest()
-        
-        if calculated_hash == received_hash:
-            user_json = params.get('user')
-            if user_json:
-                return json.loads(user_json)
-        return None
-    except Exception as e:
-        print(f"[Security] Error validating Telegram initData: {e}")
-        return None
+        h = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256)
+        return h.hexdigest() == vals['hash']
+    except Exception:
+        return False
 
 
 @app.route('/api/done', methods=['POST'])
 def mark_task_done():
     try:
-        # Extract init_data from header or payload
-        init_data = request.headers.get('X-TG-Init-Data')
         data = request.get_json(silent=True) or {}
-        if not init_data:
-            init_data = data.get('init_data')
-
-        if not init_data:
-            return jsonify({"success": False, "error": "Unauthorized: Missing initData"}), 403
-
-        # Validate init_data and verify user identity
-        user_data = validate_telegram_init_data(init_data)
-        if not user_data or user_data.get('id') != config.MY_TELEGRAM_ID:
-            return jsonify({"success": False, "error": "403 Forbidden: Unauthorized"}), 403
+        init_data = request.headers.get('Authorization')
+        if not validate_telegram_data(init_data):
+            return jsonify({"success": False, "error": "Unauthorized"}), 403
 
         task_idx = data.get('task_idx')
         if task_idx is None:
@@ -136,6 +101,10 @@ def get_pwa_manifest():
 @app.route('/api/now', methods=['GET'])
 def get_focus_task():
     try:
+        init_data = request.headers.get('Authorization')
+        if not validate_telegram_data(init_data):
+            return jsonify({"success": False, "error": "Unauthorized"}), 403
+
         from drive_service import get_today_tasks
         today_tasks = get_today_tasks()
         open_tasks = [t for t in today_tasks if not t.get("done")]
@@ -163,41 +132,6 @@ Tasks list:
 
 @app.route('/')
 def home():
-    init_data = request.args.get('init_data')
-    if not init_data:
-        # Bootstrapper to extract WebApp initData client-side and reload
-        bootstrapper = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <script src="https://telegram.org/js/telegram-web-app.js"></script>
-            <script>
-                window.onload = function() {
-                    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
-                        var initData = window.Telegram.WebApp.initData;
-                        window.location.href = "/?init_data=" + encodeURIComponent(initData);
-                    } else {
-                        document.body.innerHTML = '<h1 style="color: #ef4444; text-align: center; margin-top: 50px; font-family: sans-serif;">403 Forbidden: Telegram WebApp Only</h1>';
-                    }
-                }
-            </script>
-        </head>
-        <body style="background-color: #020617; color: white;">
-            <p style="text-align: center; margin-top: 50px; font-family: sans-serif;">Loading Time OS...</p>
-        </body>
-        </html>
-        """
-        return render_template_string(bootstrapper)
-
-    # Validate init_data and verify user identity
-    try:
-        user_data = validate_telegram_init_data(init_data)
-        if not isinstance(user_data, dict) or user_data.get('id') != config.MY_TELEGRAM_ID:
-            return "403 Forbidden: Unauthorized", 403
-    except Exception as val_e:
-        print(f"[Dashboard] Exception during WebApp validation: {val_e}")
-        return "403 Forbidden: Unauthorized", 403
-
     today_label = datetime.now(config.msk_tz).strftime("%d.%m.%Y")
 
     # Safe Google Drive Reads & Fallbacks
@@ -247,7 +181,7 @@ def home():
         habit_data = []
         today = datetime.now(config.msk_tz)
         for i in range(13, -1, -1):
-            day = today - datetime.timedelta(days=i)
+            day = today - timedelta(days=i)
             habit_data.append({
                 "date": day.strftime("%Y-%m-%d"),
                 "label": day.strftime("%d.%m"),

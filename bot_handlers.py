@@ -296,6 +296,56 @@ Analyze this image. If it's a receipt, calculate the total and output `[FINANCE]
         bot.reply_to(message, f"Ошибка обработки изображения: {e}")
 
 
+@bot.inline_handler(func=lambda query: len(query.query) > 0)
+def handle_inline_query(inline_query):
+    """
+    Inline mode handler for quick capture. Uses MODEL_LITE.
+    """
+    if inline_query.from_user.id != config.MY_TELEGRAM_ID:
+        return
+    try:
+        text = inline_query.query.strip()
+        now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
+        today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+
+        prompt = f"""Текущее время в Москве: {now_msk}
+Сегодняшняя дата: {today_str}
+
+Пользователь отправил быструю заметку через Inline-режим: "{text}"
+
+Если из этой заметки нужно извлечь данные, добавь в ответ одну строку на каждый тип (только если применимо):
+[TASK] ГГГГ-ММ-ДД ЧЧ:ММ | Описание задачи или рутины
+[FINANCE] ГГГГ-ММ-ДД: сумма | категория | описание
+[HEALTH] ГГГГ-ММ-ДД: часы
+[MEMORY] факт для долгосрочной памяти
+[SCHEDULE] ГГГГ-ММ-ДД ЧЧ:ММ | Текст напоминания
+[QUESTION] Name: суть вопроса
+
+Пожалуйста, будь точен в распознавании. Никакого другого текста писать НЕ нужно, только теги с новой строки (если применимо).
+"""
+        response = key_manager.generate_content(
+            model=config.MODEL_LITE,
+            contents=prompt
+        )
+        raw_text = response.text
+
+        tags = parse_gemini_tags(raw_text)
+        apply_gemini_tags(tags)
+
+        # Build inline result
+        r = telebot.types.InlineQueryResultArticle(
+            id='1',
+            title='✅ Task/Data captured!',
+            input_message_content=telebot.types.InputTextMessageContent(
+                message_text=f"✅ Успешно записано в Time OS: {text}"
+            ),
+            description=f"Распознать и сохранить: {text}"
+        )
+        bot.answer_inline_query(inline_query.id, [r], cache_time=1)
+    except Exception as e:
+        print(f"[Inline Query] Error handling query: {e}")
+
+
 @bot.message_handler(func=lambda message: True)
 def chat_with_gemini(message):
     """

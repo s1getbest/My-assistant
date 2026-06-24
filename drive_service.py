@@ -1,4 +1,5 @@
 import io
+import hashlib
 import time
 import threading
 import json
@@ -11,14 +12,18 @@ import config
 
 # === GOOGLE DRIVE CREDENTIALS INITIALIZATION ===
 _drive_creds = None
+_GOOGLE_SCOPES = [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/calendar.events",
+]
 try:
     if config.GOOGLE_TOKEN_JSON:
         token_data = json.loads(config.GOOGLE_TOKEN_JSON)
         _drive_creds = Credentials.from_authorized_user_info(
             token_data, 
-            scopes=["https://www.googleapis.com/auth/drive"]
+            scopes=_GOOGLE_SCOPES
         )
-        print("[Drive] Successfully authorized with Google Drive!")
+        print("[Drive] Successfully authorized with Google Drive/Calendar credentials!")
     else:
         print("[Drive] Warning: GOOGLE_TOKEN_JSON environment variable is empty.")
 except Exception as e:
@@ -29,6 +34,12 @@ def get_drive_service():
     if _drive_creds is None:
         raise RuntimeError("Google Drive credentials not initialized.")
     return build('drive', 'v3', credentials=_drive_creds)
+
+
+def get_calendar_service():
+    if _drive_creds is None:
+        raise RuntimeError("Google credentials not initialized.")
+    return build('calendar', 'v3', credentials=_drive_creds)
 
 
 # === GOOGLE DRIVE CACHING ===
@@ -132,14 +143,42 @@ def append_line_to_drive(filename, line):
         return False
 
 
+def normalize_task_line(task_line):
+    return (task_line or "").strip()
+
+
+def get_task_line_token(task_line):
+    normalized = normalize_task_line(task_line)
+    if not normalized:
+        return None
+    return hashlib.md5(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def _task_line_matches(line, search_text):
+    normalized_line = normalize_task_line(line)
+    normalized_search = normalize_task_line(search_text)
+    if not normalized_line or not normalized_search:
+        return False
+    return (
+        normalized_line == normalized_search
+        or normalized_line.endswith(normalized_search)
+    )
+
+
 def delete_line_from_task_file(search_text):
     try:
         content = read_file_from_drive("Tasks.md")
         if not content.strip():
             return False
         lines = content.split("\n")
-        filtered_lines = [line for line in lines if search_text not in line]
-        if filtered_lines == lines:
+        filtered_lines = []
+        removed = False
+        for line in lines:
+            if not removed and _task_line_matches(line, search_text):
+                removed = True
+                continue
+            filtered_lines.append(line)
+        if not removed:
             return False
         write_file_to_drive("Tasks.md", "\n".join(filtered_lines).strip())
         return True
@@ -156,8 +195,8 @@ def edit_line_in_task_file(old_search_text, new_line_text):
         lines = content.split("\n")
         updated = False
         for idx, line in enumerate(lines):
-            if old_search_text in line:
-                lines[idx] = new_line_text
+            if _task_line_matches(line, old_search_text):
+                lines[idx] = new_line_text.strip()
                 updated = True
                 break
         if not updated:
@@ -167,6 +206,64 @@ def edit_line_in_task_file(old_search_text, new_line_text):
     except Exception as e:
         print(f"[Drive] Edit task line error: {e}")
         return False
+
+
+def get_task_line_by_token(task_token):
+    try:
+        if not task_token:
+            return None
+        content = read_file_from_drive("Tasks.md")
+        for line in content.split("\n"):
+            if get_task_line_token(line) == task_token:
+                return normalize_task_line(line)
+        return None
+    except Exception as e:
+        print(f"[Drive] Get task by token error: {e}")
+        return None
+
+
+def mark_task_done_by_token(task_token):
+    try:
+        if not task_token:
+            return None
+        content = read_file_from_drive("Tasks.md")
+        lines = content.split("\n")
+        for idx, line in enumerate(lines):
+            normalized = normalize_task_line(line)
+            if "[ ]" in normalized and get_task_line_token(normalized) == task_token:
+                lines[idx] = line.replace("[ ]", "[x]", 1)
+                write_file_to_drive("Tasks.md", "\n".join(lines))
+                return normalize_task_line(lines[idx])
+        return None
+    except Exception as e:
+        print(f"[Drive] Mark task done by token error: {e}")
+        return None
+
+
+def add_event_to_calendar(task_text, datetime_obj):
+    try:
+        event_start = datetime_obj
+        if event_start.tzinfo is None:
+            event_start = config.msk_tz.localize(event_start)
+        else:
+            event_start = event_start.astimezone(config.msk_tz)
+        event_end = event_start + timedelta(hours=1)
+        calendar_service = get_calendar_service()
+        event = {
+            "summary": task_text,
+            "start": {
+                "dateTime": event_start.isoformat(),
+                "timeZone": "Europe/Moscow",
+            },
+            "end": {
+                "dateTime": event_end.isoformat(),
+                "timeZone": "Europe/Moscow",
+            },
+        }
+        return calendar_service.events().insert(calendarId="primary", body=event).execute()
+    except Exception as e:
+        print(f"[Calendar] Add event error: {e}")
+        return None
 
 
 def list_markdown_files(limit=10):

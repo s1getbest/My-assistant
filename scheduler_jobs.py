@@ -6,8 +6,8 @@ import config
 from bot_instance import bot
 from key_manager import key_manager
 from drive_service import (
-    append_line_to_drive,
     get_today_tasks,
+    get_task_line_token,
     read_file_from_drive,
     read_or_create_goals,
     write_file_to_drive,
@@ -35,8 +35,10 @@ def _build_reminder_job_id(run_date, task_text):
     return f"reminder_{digest}"
 
 
-def schedule_reminder_job(chat_id, task_text, run_date):
+def schedule_reminder_job(chat_id, task_text, run_date, task_line=None):
     run_date = _normalize_run_date(run_date)
+    if not task_line:
+        task_line = f"* [ ] {run_date.strftime('%Y-%m-%d %H:%M')} | ⏰ REMINDER: {task_text}"
     job_id = _build_reminder_job_id(run_date, task_text)
     scheduler.add_job(
         send_dynamic_reminder,
@@ -44,7 +46,7 @@ def schedule_reminder_job(chat_id, task_text, run_date):
         id=job_id,
         replace_existing=True,
         run_date=run_date,
-        args=[chat_id, task_text],
+        args=[chat_id, task_text, task_line],
         misfire_grace_time=300,
     )
     return job_id
@@ -82,7 +84,12 @@ def restore_reminders_on_startup(bot_instance):
             if run_date <= now:
                 continue
 
-            schedule_reminder_job(config.MY_TELEGRAM_ID, _clean_reminder_text(task_text), run_date)
+            schedule_reminder_job(
+                config.MY_TELEGRAM_ID,
+                _clean_reminder_text(task_text),
+                run_date,
+                task_line=line.strip(),
+            )
             restored_count += 1
 
         print(f"[Scheduler] Restored {restored_count} reminders/tasks from Tasks.md on startup.")
@@ -91,7 +98,7 @@ def restore_reminders_on_startup(bot_instance):
         print(f"[Scheduler] Reminder restore error: {e}")
         return 0
 
-def send_dynamic_reminder(chat_id, task_text):
+def send_dynamic_reminder(chat_id, task_text, task_line=None):
     """
     Triggers dynamic reminders registered by users. Uses MODEL_COMPLEX.
     """
@@ -107,9 +114,12 @@ def send_dynamic_reminder(chat_id, task_text):
     try:
         import telebot
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
-        btn_done = telebot.types.InlineKeyboardButton("✅ Done", callback_data=f"task_done:{task_text[:45]}")
-        btn_snooze_1h = telebot.types.InlineKeyboardButton("⏰ Snooze 1h", callback_data=f"task_snooze_1h:{task_text[:45]}")
-        btn_snooze_24h = telebot.types.InlineKeyboardButton("📅 Tomorrow", callback_data=f"task_snooze_24h:{task_text[:45]}")
+        task_token = get_task_line_token(task_line)
+        if not task_token:
+            raise ValueError("Task token could not be generated for reminder callback.")
+        btn_done = telebot.types.InlineKeyboardButton("✅ Done", callback_data=f"task_done:{task_token}")
+        btn_snooze_1h = telebot.types.InlineKeyboardButton("⏰ Snooze 1h", callback_data=f"task_snooze_1h:{task_token}")
+        btn_snooze_24h = telebot.types.InlineKeyboardButton("📅 Tomorrow", callback_data=f"task_snooze_24h:{task_token}")
         markup.add(btn_done, btn_snooze_1h, btn_snooze_24h)
         
         bot.send_message(chat_id, f"⏰ **НАПОМИНАНИЕ!**\n\n{reply}", reply_markup=markup)

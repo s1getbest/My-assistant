@@ -8,6 +8,7 @@ import config
 from bot_instance import bot
 import telebot
 from drive_service import (
+    append_line_to_drive,
     read_file_from_drive,
     write_file_to_drive,
     get_today_tasks,
@@ -238,26 +239,29 @@ def home():
 @app.route('/api/webhook/external', methods=['POST'])
 def external_webhook():
     import os
-    expected_key = os.getenv("EXTERNAL_API_KEY", "default_secret_key_123")
-    received_key = request.headers.get('X-External-API-Key')
-    if not received_key:
-        received_key = request.args.get('api_key')
-        
-    if not received_key or received_key != expected_key:
-        return jsonify({"success": False, "error": "Unauthorized: Invalid API Key"}), 401
-        
-    data = request.get_json(silent=True) or {}
-    text = data.get("text", "").strip()
-    if not text:
-        return jsonify({"success": False, "error": "Missing 'text' parameter in payload"}), 400
-        
-    # Import process_external_text dynamically to avoid circular dependencies
-    from bot_handlers import process_external_text
-    res = process_external_text(text)
-    if res.get("success"):
-        return jsonify({"status": "success", "reply": res.get("reply"), "tags": res.get("tags_found")})
-    else:
-        return jsonify({"success": False, "error": res.get("error")}), 500
+    try:
+        expected_key = os.getenv("EXTERNAL_API_KEY", "default_secret_key_123")
+        received_key = request.headers.get('X-External-API-Key')
+        if not received_key:
+            received_key = request.args.get('api_key')
+
+        if not received_key or received_key != expected_key:
+            return jsonify({"success": False, "error": "Unauthorized: Invalid API Key"}), 401
+
+        data = request.get_json(silent=True) or {}
+        text = data.get("text", "").strip()
+        if not text:
+            return jsonify({"success": False, "error": "Missing 'text' parameter in payload"}), 400
+
+        sender = (data.get("sender") or data.get("source") or "External").strip()
+        timestamp = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
+        inbox_line = f"[{timestamp}] {sender}: {text}"
+        if not append_line_to_drive("Raw_Inbox.md", inbox_line):
+            return jsonify({"success": False, "error": "Failed to append to Raw_Inbox.md"}), 500
+
+        return jsonify({"success": True, "status": "queued", "stored": inbox_line})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route(f'/webhook/{config.TELEGRAM_TOKEN}', methods=['POST'])

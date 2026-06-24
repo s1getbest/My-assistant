@@ -6,10 +6,13 @@ import config
 from bot_instance import bot
 from key_manager import key_manager
 from drive_service import (
+    add_event_to_calendar,
     append_line_to_drive,
     delete_line_from_task_file,
     edit_line_in_task_file,
+    get_task_line_by_token,
     list_markdown_files,
+    mark_task_done_by_token,
     read_file_from_drive,
     write_file_to_drive,
 )
@@ -75,6 +78,14 @@ def build_task_line(payload):
     return f"* [ ] {payload.strip()}"
 
 
+def extract_task_text_from_line(task_line):
+    stripped = (task_line or "").strip()
+    stripped = re.sub(r'^[\*\-\s]*\[[ xX]\]\s*', '', stripped)
+    if "|" in stripped:
+        return stripped.split("|", 1)[1].strip().replace("⏰ REMINDER:", "", 1).strip()
+    return stripped.replace("⏰ REMINDER:", "", 1).strip()
+
+
 def apply_gemini_tags(tags):
     for tag_type, payload in tags:
         if not payload:
@@ -108,13 +119,12 @@ def apply_gemini_tags(tags):
                 dt_str, task_text = dt_str.strip(), task_text.strip()
                 run_date = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
                 run_date = config.msk_tz.localize(run_date)
+                task_line = f"* [ ] {dt_str} | ⏰ REMINDER: {task_text}"
 
                 from scheduler_jobs import schedule_reminder_job
-                schedule_reminder_job(config.MY_TELEGRAM_ID, task_text, run_date)
-                append_line_to_drive(
-                    "Tasks.md",
-                    f"* [ ] {dt_str} | ⏰ REMINDER: {task_text}"
-                )
+                schedule_reminder_job(config.MY_TELEGRAM_ID, task_text, run_date, task_line=task_line)
+                add_event_to_calendar(task_text, run_date)
+                append_line_to_drive("Tasks.md", task_line)
         except Exception as e:
             print(f"[Tag Apply] Tag apply error [{tag_type}]: {e}")
 
@@ -414,7 +424,7 @@ def handle_task_callback(call):
         bot.answer_callback_query(call.id, "Ошибка: Доступ запрещен.", show_alert=True)
         return
     try:
-        action, task_text = call.data.split(':', 1)
+        action, task_token = call.data.split(':', 1)
         
         # Remove reply markup (the inline buttons) to prevent double clicks
         try:
@@ -423,36 +433,33 @@ def handle_task_callback(call):
             pass
 
         if action == "task_done":
-            content = read_file_from_drive("Tasks.md")
-            lines = content.split("\n")
-            task_found = False
-            for i, line in enumerate(lines):
-                if "[ ]" in line and task_text in line:
-                    lines[i] = line.replace("[ ]", "[x]", 1)
-                    task_found = True
-                    break
-            
-            if task_found:
-                write_file_to_drive("Tasks.md", "\n".join(lines))
+            updated_line = mark_task_done_by_token(task_token)
+            task_text = extract_task_text_from_line(updated_line)
+            if updated_line:
                 from drive_service import add_user_xp
                 add_user_xp(10)
                 bot.answer_callback_query(call.id, "Отмечено как выполнено! +10 XP")
                 bot.send_message(call.message.chat.id, f"✅ Выполнено: **{task_text}** (+10 XP)", parse_mode="Markdown")
             else:
                 bot.answer_callback_query(call.id, "Задача уже выполнена или не найдена.")
-                bot.send_message(call.message.chat.id, f"✅ Задача выполнена: **{task_text}**", parse_mode="Markdown")
+                bot.send_message(call.message.chat.id, "✅ Задача уже обработана или не найдена.", parse_mode="Markdown")
                 
         elif action in ["task_snooze_1h", "task_snooze_24h"]:
             import datetime
             delay_hours = 1 if "1h" in action else 24
+            old_task_line = get_task_line_by_token(task_token)
+            if not old_task_line:
+                bot.answer_callback_query(call.id, "Исходная задача не найдена.", show_alert=True)
+                return
+
+            task_text = extract_task_text_from_line(old_task_line)
             run_date = datetime.datetime.now(config.msk_tz) + datetime.timedelta(hours=delay_hours)
+            new_task_line = f"* [ ] {run_date.strftime('%Y-%m-%d %H:%M')} | ⏰ REMINDER: {task_text}"
 
             from scheduler_jobs import schedule_reminder_job
-            schedule_reminder_job(config.MY_TELEGRAM_ID, task_text, run_date)
-            append_line_to_drive(
-                "Tasks.md",
-                f"* [ ] {run_date.strftime('%Y-%m-%d %H:%M')} | ⏰ REMINDER: {task_text}"
-            )
+            delete_line_from_task_file(old_task_line)
+            append_line_to_drive("Tasks.md", new_task_line)
+            schedule_reminder_job(config.MY_TELEGRAM_ID, task_text, run_date, task_line=new_task_line)
             bot.answer_callback_query(call.id, f"Отложено на {delay_hours} ч.")
             bot.send_message(call.message.chat.id, f"⏰ Напоминание **{task_text}** успешно отложено на {delay_hours} ч.", parse_mode="Markdown")
             
@@ -634,6 +641,43 @@ Notes:
         bot.reply_to(message, response.text.strip())
     except Exception as e:
         bot.reply_to(message, f"Ошибка глобального поиска: {e}")
+
+
+@bot.message_handler(commands=['digest'])
+def handle_digest(message):
+    if not is_me(message):
+        return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        raw_inbox = read_file_from_drive("Raw_Inbox.md")
+        if not raw_inbox.strip():
+            bot.reply_to(message, "Raw_Inbox пуст.")
+            return
+
+        now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
+        prompt = f"""Текущее время в Москве: {now_msk}
+
+Ниже сырые входящие сообщения из Raw_Inbox.md. Extract tasks into [TASK_ADD] and questions into [QUESTION]. Ignore casual chat.
+
+Если времени у задачи нет, но есть день/дата, выбери разумное время. Если информации недостаточно, не создавай тег.
+Выводи только теги, по одному на строку.
+
+Raw_Inbox.md:
+---
+{raw_inbox}
+---
+"""
+        response = key_manager.generate_content(
+            model=config.MODEL_COMPLEX,
+            contents=prompt
+        )
+        raw_text = response.text.strip()
+        tags = parse_gemini_tags(raw_text)
+        apply_gemini_tags(tags)
+        write_file_to_drive("Raw_Inbox.md", "")
+        bot.reply_to(message, f"📥 Inbox разобран. Извлечено тегов: {len(tags)}")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка digest: {e}")
 
 
 @bot.message_handler(func=lambda message: True)

@@ -29,9 +29,13 @@ def validate_telegram_init_data(init_data_str):
     Validates Telegram WebApp initData and returns parsed user dict if valid and authorized, or None.
     Uses HMAC-SHA256 with TELEGRAM_TOKEN as key.
     """
-    if not init_data_str:
+    if not init_data_str or not isinstance(init_data_str, str):
         return None
     try:
+        if not config.TELEGRAM_TOKEN:
+            print("[Security] Warning: TELEGRAM_TOKEN is not configured.")
+            return None
+
         # Parse query string
         parsed = urllib.parse.parse_qsl(init_data_str, keep_blank_values=True)
         params = dict(parsed)
@@ -160,7 +164,6 @@ Tasks list:
 @app.route('/')
 def home():
     init_data = request.args.get('init_data')
-    # If opened as standalone PWA or bypassed authorization, we still require initData but let's allow bypassed access if pwa argument or token json exists for testing
     if not init_data:
         # Bootstrapper to extract WebApp initData client-side and reload
         bootstrapper = """
@@ -187,37 +190,97 @@ def home():
         return render_template_string(bootstrapper)
 
     # Validate init_data and verify user identity
-    user_data = validate_telegram_init_data(init_data)
-    if not user_data or user_data.get('id') != config.MY_TELEGRAM_ID:
+    try:
+        user_data = validate_telegram_init_data(init_data)
+        if not isinstance(user_data, dict) or user_data.get('id') != config.MY_TELEGRAM_ID:
+            return "403 Forbidden: Unauthorized", 403
+    except Exception as val_e:
+        print(f"[Dashboard] Exception during WebApp validation: {val_e}")
         return "403 Forbidden: Unauthorized", 403
 
     today_label = datetime.now(config.msk_tz).strftime("%d.%m.%Y")
-    today_tasks = get_today_tasks()
-    total_spent, recent_expenses = get_monthly_expenses()
-    sleep_data, sleep_labels, last_sleep = get_sleep_chart_data()
-    expense_categories = get_expenses_by_category()
-    habit_data = get_habit_completion_array()
-    profile = get_user_profile()
 
-    # Read Insight.md
-    insight_msg = "Сделай сегодняшний день шедевром! ✨"
+    # Safe Google Drive Reads & Fallbacks
+    today_tasks = []
+    total_spent = 0
+    recent_expenses = []
+    sleep_data = [0]
+    sleep_labels = ["No data"]
+    last_sleep = "—"
+    expense_categories = {}
+    habit_data = []
+    profile = {"xp": 0, "level": 1}
+    insight_msg = "Have a great day, Pavel! ✨"
+    welcome_msg = "Привет, Павел! Рад тебя видеть в Time OS 2.0."
+
+    # Fetch with individual try-except blocks
+    try:
+        today_tasks = get_today_tasks()
+    except Exception as e:
+        print(f"[Dashboard] Error getting today tasks: {e}")
+        today_tasks = []
+
+    try:
+        total_spent, recent_expenses = get_monthly_expenses()
+    except Exception as e:
+        print(f"[Dashboard] Error getting monthly expenses: {e}")
+        total_spent, recent_expenses = 0, []
+
+    try:
+        sleep_data, sleep_labels, last_sleep = get_sleep_chart_data()
+    except Exception as e:
+        print(f"[Dashboard] Error getting sleep data: {e}")
+        sleep_data, sleep_labels, last_sleep = [0], ["No data"], "—"
+
+    try:
+        expense_categories = get_expenses_by_category()
+    except Exception as e:
+        print(f"[Dashboard] Error getting expense categories: {e}")
+        expense_categories = {}
+
+    try:
+        habit_data = get_habit_completion_array()
+        if not habit_data:
+            raise ValueError("Empty habit completion array")
+    except Exception as e:
+        print(f"[Dashboard] Error getting habit completion array: {e}")
+        habit_data = []
+        today = datetime.now(config.msk_tz)
+        for i in range(13, -1, -1):
+            day = today - datetime.timedelta(days=i)
+            habit_data.append({
+                "date": day.strftime("%Y-%m-%d"),
+                "label": day.strftime("%d.%m"),
+                "total": 0,
+                "done": 0,
+                "completed": False
+            })
+
+    try:
+        profile = get_user_profile()
+        if not profile or not isinstance(profile, dict):
+            profile = {"xp": 0, "level": 1}
+    except Exception as e:
+        print(f"[Dashboard] Error getting user profile: {e}")
+        profile = {"xp": 0, "level": 1}
+
     try:
         content = read_file_from_drive("Insight.md")
-        if content.strip():
+        if content and content.strip():
             insight_msg = content.strip()
     except Exception as e:
         print(f"[Dashboard] Error reading insight: {e}")
 
-    welcome_msg = "Привет, Павел! Рад тебя видеть в Time OS 2.0."
     try:
         from key_manager import key_manager
         current_memory = read_file_from_drive("Memory.md")
-        prompt = f"Напиши одно очень короткое (до 15 слов) приветствие для Павел в Time OS 2.0 на русском языке. Можешь упомянуть важный факт из его памяти: {current_memory[:500]}"
-        response = key_manager.generate_content(
-            model=config.MODEL_LITE,
-            contents=prompt
-        )
-        welcome_msg = response.text.strip()
+        if current_memory:
+            prompt = f"Напиши одно очень короткое (до 15 слов) приветствие для Павел в Time OS 2.0 на русском языке. Можешь упомянуть важный факт из его памяти: {current_memory[:500]}"
+            response = key_manager.generate_content(
+                model=config.MODEL_LITE,
+                contents=prompt
+            )
+            welcome_msg = response.text.strip()
     except Exception as e:
         print(f"[Dashboard] Welcome message generation error: {e}")
 

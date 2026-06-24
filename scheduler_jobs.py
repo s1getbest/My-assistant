@@ -3,7 +3,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import config
 from bot_instance import bot
 from key_manager import key_manager
-from drive_service import read_file_from_drive, write_file_to_drive, get_today_tasks
+from drive_service import read_file_from_drive, write_file_to_drive, get_today_tasks, read_or_create_goals
 
 # Initialize BackgroundScheduler with Moscow Timezone
 scheduler = BackgroundScheduler(timezone=config.msk_tz)
@@ -95,12 +95,13 @@ Output only the resulting compressed list in Markdown format (using bullet point
 def morning_briefing():
     """
     Scheduled job at 06:00 AM providing Morning AI Briefing using MODEL_COMPLEX.
-    Reads today's tasks and memory, and generates an inspiring briefing.
+    Reads today's tasks, memory, and goals, and generates an inspiring briefing.
     """
     try:
         print("[Scheduler] Starting morning briefing job...")
         today_tasks = get_today_tasks()
         current_memory = read_file_from_drive("Memory.md")
+        goals_content = read_or_create_goals()
         
         # Format today's tasks
         tasks_text = ""
@@ -122,7 +123,14 @@ def morning_briefing():
 {current_memory or "Пока пустая."}
 ---
 
-Напиши короткий, мотивирующий брифинг. Отметь ключевые дела, дай одну мудрую или практичную мысль дня на основе его долгосрочной памяти или дел, и пожелай продуктивного дня. Будь краток и пиши по делу.
+Долгосрочные цели (Goals.md):
+---
+{goals_content or "Пока пустые."}
+---
+
+Review the user's long-term goals. Suggest ONE small, actionable task for today that moves them closer to these goals, and include it in your briefing message.
+
+Напиши короткий, мотивирующий брифинг на русском языке. Отметь ключевые дела, предложи одну маленькую конкретную сегодняшнюю задачу для достижения его долгосрочных целей, дай одну мудрую или практичную мысль дня и пожелай продуктивного дня. Будь краток и пиши по делу.
 """
         response = key_manager.generate_content(
             model=config.MODEL_COMPLEX,
@@ -139,8 +147,79 @@ def morning_briefing():
         print(f"[Scheduler] Error generating morning briefing: {e}")
 
 
+def weekly_audit():
+    """
+    Weekly cron job at 20:00 Sunday (Moscow time) analyzing the past 7 days.
+    """
+    try:
+        print("[Scheduler] Starting weekly audit job...")
+        import datetime
+        now = datetime.datetime.now(config.msk_tz)
+        dates = [(now - datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+        
+        tasks_content = read_file_from_drive("Tasks.md")
+        finance_content = read_file_from_drive("Finance.md")
+        health_content = read_file_from_drive("Health.md")
+        
+        def filter_last_7_days(content, dates_list):
+            filtered = []
+            for line in content.split("\n"):
+                if any(d in line for d in dates_list):
+                    filtered.append(line)
+            return "\n".join(filtered)
+            
+        tasks_7d = filter_last_7_days(tasks_content, dates)
+        finance_7d = filter_last_7_days(finance_content, dates)
+        health_7d = filter_last_7_days(health_content, dates)
+        
+        prompt = f"""Act as a strict but supportive life coach. Analyze this 7-day data.
+Summarize spending, average sleep, and task completion. Provide 1 actionable insight and ask for next week's goals.
+
+Here is the data for the past 7 days (dates: {', '.join(dates[::-1])}):
+
+### Tasks.md (7-day data):
+---
+{tasks_7d or "Нет записей."}
+---
+
+### Finance.md (7-day data):
+---
+{finance_7d or "Нет записей."}
+---
+
+### Health.md (7-day data):
+---
+{health_7d or "Нет записей."}
+---
+
+Write a comprehensive, professional, yet warm and inspiring Markdown report. Deliver direct feedback as a dedicated coach. Use clear headings, list structures, and highlighted insights.
+"""
+        response = key_manager.generate_content(
+            model=config.MODEL_COMPLEX,
+            contents=prompt
+        )
+        report = response.text.strip()
+        
+        try:
+            bot.send_message(
+                config.MY_TELEGRAM_ID,
+                f"📊 **ЕЖЕНЕДЕЛЬНЫЙ ИНФОРМАЦИОННЫЙ АУДИТ (RESET)**\n\n{report}",
+                parse_mode="Markdown"
+            )
+        except Exception as parse_err:
+            print(f"[Scheduler] Telegram markdown parsing failed, trying HTML/plain: {parse_err}")
+            bot.send_message(
+                config.MY_TELEGRAM_ID,
+                f"📊 ЕЖЕНЕДЕЛЬНЫЙ ИНФОРМАЦИОННЫЙ АУДИТ (RESET)\n\n{report}"
+            )
+        print("[Scheduler] Weekly audit successfully sent.")
+    except Exception as e:
+        print(f"[Scheduler] Error generating weekly audit: {e}")
+
+
 # Register scheduled cron jobs
 scheduler.add_job(morning_briefing, 'cron', hour=6, minute=0)
 scheduler.add_job(check_daily_sleep, 'cron', hour=10, minute=0)
 scheduler.add_job(evening_planning_reminder, 'cron', hour=20, minute=0)
 scheduler.add_job(compress_memory, 'cron', day_of_week='sun', hour=3, minute=0)
+scheduler.add_job(weekly_audit, 'cron', day_of_week='sun', hour=20, minute=0)

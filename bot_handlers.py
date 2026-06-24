@@ -241,6 +241,61 @@ def handle_voice(message):
         bot.reply_to(message, f"Ошибка обработки голосового сообщения: {e}")
 
 
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
+    """
+    Handles photo messages using MODEL_COMPLEX (vision support).
+    """
+    if not is_me(message):
+        return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        # Get highest resolution photo
+        photo = message.photo[-1]
+        file_info = bot.get_file(photo.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+
+        now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
+        today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+        
+        caption = message.caption or ""
+
+        prompt = f"""Текущее время в Москве: {now_msk}
+Сегодняшняя дата: {today_str}
+
+Пользователь прислал изображение. Вот его описание/подпись (если есть): "{caption}"
+
+Analyze this image. If it's a receipt, calculate the total and output `[FINANCE] YYYY-MM-DD: amount | category | description`. If it's handwritten notes or a whiteboard, extract actionable items as `[TASK] YYYY-MM-DD HH:MM | Task`. If it's an article/screenshot, summarize it as `[MEMORY] summary`.
+
+Помимо тегов, напиши пользователю краткий содержательный ответ/комментарий. Начни свой ответ с [ОТВЕТ], чтобы отделить живой ответ от тегов.
+
+Формат ответа:
+[ОТВЕТ]
+Твой ответ пользователю
+(далее теги, если нужны — каждый с новой строки)
+"""
+
+        response = key_manager.generate_content(
+            model=config.MODEL_COMPLEX,
+            contents=[
+                types.Part.from_bytes(
+                    data=downloaded_file,
+                    mime_type="image/jpeg"
+                ),
+                prompt
+            ]
+        )
+        raw_text = response.text
+
+        tags = parse_gemini_tags(raw_text)
+        reply_part = extract_reply(raw_text)
+        apply_gemini_tags(tags)
+
+        bot.reply_to(message, reply_part)
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка обработки изображения: {e}")
+
+
 @bot.message_handler(func=lambda message: True)
 def chat_with_gemini(message):
     """

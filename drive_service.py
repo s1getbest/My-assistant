@@ -239,3 +239,106 @@ def get_today_tasks():
     except Exception as e:
         print(f"[Parser] Tasks parse error: {e}")
     return tasks
+
+
+def get_expenses_by_category():
+    categories = {}
+    try:
+        finance_content = read_file_from_drive("Finance.md")
+        current_month = datetime.now(config.msk_tz).strftime("%Y-%m")
+        for line in finance_content.split("\n"):
+            line = line.strip()
+            if not line or ":" not in line:
+                continue
+            date_part = line.split(":", 1)[0].replace("*", "").strip()
+            if not date_part.startswith(current_month):
+                continue
+            amount = parse_finance_amount(line)
+            val_part = line.split(":", 1)[1].strip()
+            parts = [p.strip() for p in val_part.split("|")]
+            cat = parts[1] if len(parts) > 2 else (parts[1] if len(parts) > 1 else "Разное")
+            if not cat:
+                cat = "Разное"
+            categories[cat] = categories.get(cat, 0) + amount
+    except Exception as e:
+        print(f"[Parser] Expenses by category parse error: {e}")
+    return categories
+
+
+def get_habit_completion_array():
+    habit_data = []
+    try:
+        content = read_file_from_drive("Tasks.md")
+        lines = content.split("\n")
+        
+        routine_keywords = [
+            "routine", "habit", "зарядка", "тренировка", "медитация", "чтение", 
+            "планирование", "workout", "english", "брифинг", "витамины", "вода", 
+            "спорт", "read", "meditate", "уборка", "чистить зубы", "прогулка", "study"
+        ]
+        
+        today = datetime.now(config.msk_tz)
+        for i in range(13, -1, -1):
+            day = today - datetime.timedelta(days=i)
+            day_str = day.strftime("%Y-%m-%d")
+            day_label = day.strftime("%d.%m")
+            
+            total_routines = 0
+            done_routines = 0
+            
+            for line in lines:
+                stripped = line.strip()
+                if not stripped or day_str not in stripped:
+                    continue
+                
+                is_routine = any(kw in stripped.lower() for kw in routine_keywords)
+                if is_routine:
+                    total_routines += 1
+                    if "[x]" in stripped.lower():
+                        done_routines += 1
+            
+            if total_routines == 0:
+                for line in lines:
+                    stripped = line.strip()
+                    if not stripped or day_str not in stripped:
+                        continue
+                    if "[ ]" in stripped or "[x]" in stripped.lower():
+                        total_routines += 1
+                        if "[x]" in stripped.lower():
+                            done_routines += 1
+            
+            completed = False
+            if total_routines > 0:
+                completed = (done_routines / total_routines) >= 0.5
+            
+            habit_data.append({
+                "date": day_str,
+                "label": day_label,
+                "total": total_routines,
+                "done": done_routines,
+                "completed": completed
+            })
+    except Exception as e:
+        print(f"[Parser] Habit completion error: {e}")
+        today = datetime.now(config.msk_tz)
+        for i in range(13, -1, -1):
+            day = today - datetime.timedelta(days=i)
+            habit_data.append({
+                "date": day.strftime("%Y-%m-%d"),
+                "label": day.strftime("%d.%m"),
+                "total": 0,
+                "done": 0,
+                "completed": False
+            })
+    return habit_data
+
+
+def read_or_create_goals():
+    """
+    Reads Goals.md from drive. If it doesn't exist, creates it with a default template.
+    """
+    content = read_file_from_drive("Goals.md")
+    if not content.strip():
+        content = "# Мои долгосрочные цели\n\n* Улучшить здоровье и сон\n* Вести учет финансов\n* Повысить продуктивность"
+        write_file_to_drive("Goals.md", content)
+    return content

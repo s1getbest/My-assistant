@@ -13,6 +13,8 @@ from drive_service import (
     get_today_tasks,
     get_monthly_expenses,
     get_sleep_chart_data,
+    get_expenses_by_category,
+    get_habit_completion_array,
 )
 
 # Initialize Flask Mini App
@@ -138,6 +140,21 @@ def home():
     today_tasks = get_today_tasks()
     total_spent, recent_expenses = get_monthly_expenses()
     sleep_data, sleep_labels, last_sleep = get_sleep_chart_data()
+    expense_categories = get_expenses_by_category()
+    habit_data = get_habit_completion_array()
+
+    welcome_msg = "Привет, Павел! Рад тебя видеть в Time OS 2.0."
+    try:
+        from key_manager import key_manager
+        current_memory = read_file_from_drive("Memory.md")
+        prompt = f"Напиши одно очень короткое (до 15 слов) приветствие для Павла в Time OS 2.0 на русском языке. Можешь упомянуть важный факт из его памяти: {current_memory[:500]}"
+        response = key_manager.generate_content(
+            model=config.MODEL_LITE,
+            contents=prompt
+        )
+        welcome_msg = response.text.strip()
+    except Exception as e:
+        print(f"[Dashboard] Welcome message generation error: {e}")
 
     return render_template(
         "dashboard.html",
@@ -148,6 +165,9 @@ def home():
         sleep_data=sleep_data,
         sleep_labels=sleep_labels,
         last_sleep=last_sleep,
+        expense_categories=expense_categories,
+        habit_data=habit_data,
+        welcome_msg=welcome_msg,
     )
 
 

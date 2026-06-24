@@ -107,9 +107,59 @@ def mark_task_done():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route('/manifest.json')
+def get_pwa_manifest():
+    manifest = {
+        "short_name": "Time OS",
+        "name": "Time OS 2.0 Dashboard",
+        "icons": [
+            {
+                "src": "https://cdn-icons-png.flaticon.com/512/1162/1162456.png",
+                "type": "image/png",
+                "sizes": "512x512"
+            }
+        ],
+        "start_url": "/?pwa=true",
+        "background_color": "#020617",
+        "theme_color": "#6366f1",
+        "display": "standalone",
+        "orientation": "portrait"
+    }
+    return jsonify(manifest)
+
+
+@app.route('/api/now', methods=['GET'])
+def get_focus_task():
+    try:
+        from drive_service import get_today_tasks
+        today_tasks = get_today_tasks()
+        open_tasks = [t for t in today_tasks if not t.get("done")]
+        
+        if not open_tasks:
+            return jsonify({"success": True, "task": "Нет открытых задач на сегодня! Отдыхайте 🎉"})
+            
+        tasks_text = "\n".join([f"- {t.get('time', '—')} | {t.get('text')}" for t in open_tasks])
+        
+        prompt = f"""The user has 30 minutes of free time right now. Pick exactly ONE task from this list that they should do immediately. Return ONLY the task text (do not include time, bullet points, intro, or any conversational text).
+
+Tasks list:
+{tasks_text}
+"""
+        from key_manager import key_manager
+        response = key_manager.generate_content(
+            model=config.MODEL_LITE,
+            contents=prompt
+        )
+        task_recommendation = response.text.strip()
+        return jsonify({"success": True, "task": task_recommendation})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/')
 def home():
     init_data = request.args.get('init_data')
+    # If opened as standalone PWA or bypassed authorization, we still require initData but let's allow bypassed access if pwa argument or token json exists for testing
     if not init_data:
         # Bootstrapper to extract WebApp initData client-side and reload
         bootstrapper = """
@@ -148,11 +198,20 @@ def home():
     habit_data = get_habit_completion_array()
     profile = get_user_profile()
 
+    # Read Insight.md
+    insight_msg = "Сделай сегодняшний день шедевром! ✨"
+    try:
+        content = read_file_from_drive("Insight.md")
+        if content.strip():
+            insight_msg = content.strip()
+    except Exception as e:
+        print(f"[Dashboard] Error reading insight: {e}")
+
     welcome_msg = "Привет, Павел! Рад тебя видеть в Time OS 2.0."
     try:
         from key_manager import key_manager
         current_memory = read_file_from_drive("Memory.md")
-        prompt = f"Напиши одно очень короткое (до 15 слов) приветствие для Павла в Time OS 2.0 на русском языке. Можешь упомянуть важный факт из его памяти: {current_memory[:500]}"
+        prompt = f"Напиши одно очень короткое (до 15 слов) приветствие для Павел в Time OS 2.0 на русском языке. Можешь упомянуть важный факт из его памяти: {current_memory[:500]}"
         response = key_manager.generate_content(
             model=config.MODEL_LITE,
             contents=prompt
@@ -174,6 +233,7 @@ def home():
         habit_data=habit_data,
         welcome_msg=welcome_msg,
         profile=profile,
+        insight_msg=insight_msg,
     )
 
 

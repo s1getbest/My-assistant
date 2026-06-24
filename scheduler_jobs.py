@@ -99,6 +99,60 @@ Output only the resulting compressed list in Markdown format (using bullet point
         print(f"[Scheduler] Error compressing memory: {e}")
 
 
+def auto_archive_stale_tasks():
+    """
+    Finds open tasks in Tasks.md older than 7 days, removes them, and appends to Icebox.md.
+    Returns the number of archived tasks.
+    """
+    try:
+        import datetime
+        import re
+        content = read_file_from_drive("Tasks.md")
+        if not content.strip():
+            return 0
+            
+        lines = content.split("\n")
+        remaining_lines = []
+        stale_tasks = []
+        
+        date_pattern = re.compile(r'\d{4}-\d{2}-\d{2}')
+        now = datetime.datetime.now(config.msk_tz)
+        seven_days_ago = now - datetime.timedelta(days=7)
+        
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            
+            is_open = "[ ]" in stripped
+            if is_open:
+                m = date_pattern.search(stripped)
+                if m:
+                    try:
+                        task_date = datetime.datetime.strptime(m.group(0), "%Y-%m-%d")
+                        task_date = config.msk_tz.localize(task_date)
+                        if task_date < seven_days_ago:
+                            stale_tasks.append(line)
+                            continue
+                    except Exception:
+                        pass
+            remaining_lines.append(line)
+            
+        if stale_tasks:
+            write_file_to_drive("Tasks.md", "\n".join(remaining_lines))
+            icebox_content = read_file_from_drive("Icebox.md")
+            if icebox_content.strip():
+                icebox_content = icebox_content.rstrip() + "\n" + "\n".join(stale_tasks)
+            else:
+                icebox_content = "# Icebox (Someday/Maybe)\n\n" + "\n".join(stale_tasks)
+            write_file_to_drive("Icebox.md", icebox_content)
+            
+        return len(stale_tasks)
+    except Exception as e:
+        print(f"[Auto-Archiver] Error: {e}")
+        return 0
+
+
 def morning_briefing():
     """
     Scheduled job at 06:00 AM providing Morning AI Briefing using MODEL_COMPLEX.
@@ -138,6 +192,9 @@ def morning_briefing():
 Review the user's long-term goals. Suggest ONE small, actionable task for today that moves them closer to these goals, and include it in your briefing message.
 
 Напиши короткий, мотивирующий брифинг на русском языке. Отметь ключевые дела, предложи одну маленькую конкретную сегодняшнюю задачу для достижения его долгосрочных целей, дай одну мудрую или практичную мысль дня и пожелай продуктивного дня. Будь краток и пиши по делу.
+
+В самом конце ответа добавь специальный тег:
+[INSIGHT] Короткое (до 10 слов), глубокое, вдохновляющее напутствие на этот день.
 """
         response = key_manager.generate_content(
             model=config.MODEL_COMPLEX,
@@ -145,9 +202,21 @@ Review the user's long-term goals. Suggest ONE small, actionable task for today 
         )
         brief_reply = response.text.strip()
         
+        # Extract dynamic insight
+        import re
+        insight_match = re.search(r'\[INSIGHT\]\s*(.+)$', brief_reply, re.MULTILINE)
+        insight_text = "Сделай сегодняшний день шедевром! ✨"
+        if insight_match:
+            insight_text = insight_match.group(1).strip()
+            brief_reply_clean = re.sub(r'\[INSIGHT\].*$', '', brief_reply, flags=re.MULTILINE).strip()
+        else:
+            brief_reply_clean = brief_reply
+            
+        write_file_to_drive("Insight.md", insight_text)
+        
         bot.send_message(
             config.MY_TELEGRAM_ID,
-            f"☀️ **ЕЖЕДНЕВНЫЙ УТРЕННИЙ БРИФИНГ**\n\n{brief_reply}"
+            f"☀️ **ЕЖЕДНЕВНЫЙ УТРЕННИЙ БРИФИНГ**\n\n{brief_reply_clean}"
         )
         
         # Text-to-Speech Morning Podcast generation
@@ -185,6 +254,10 @@ def weekly_audit():
     """
     try:
         print("[Scheduler] Starting weekly audit job...")
+        
+        # Anti-Burnout Auto-Archiver
+        archived_count = auto_archive_stale_tasks()
+        
         import datetime
         now = datetime.datetime.now(config.msk_tz)
         dates = [(now - datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
@@ -231,6 +304,9 @@ Write a comprehensive, professional, yet warm and inspiring Markdown report. Del
             contents=prompt
         )
         report = response.text.strip()
+        
+        # Append anti-burnout stat
+        report += f"\n\n🧊 Moved {archived_count} stale tasks to the Icebox."
         
         try:
             bot.send_message(

@@ -12,7 +12,7 @@ from drive_service import (
 )
 
 # === REGEX CONSTANTS ===
-TAG_LINE_RE = re.compile(r'^\[(TASK|FINANCE|HEALTH|MEMORY|SCHEDULE|QUESTION)\]\s*(.+)$', re.MULTILINE)
+TAG_LINE_RE = re.compile(r'^\[(TASK|FINANCE|HEALTH|MEMORY|SCHEDULE|QUESTION|MOOD)\]\s*(.+)$', re.MULTILINE)
 TASK_TIME_RE = re.compile(r'(\d{2}:\d{2})\s*\|\s*(.+)$')
 
 
@@ -55,6 +55,11 @@ def apply_gemini_tags(tags):
                 append_line_to_drive("Memory.md", f"* {payload}")
             elif tag_type == "QUESTION":
                 append_line_to_drive("Questions.md", f"* {payload}")
+            elif tag_type == "MOOD":
+                today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+                append_line_to_drive("Health.md", f"* {today_str}: Mood {payload}")
+                from drive_service import add_user_xp
+                add_user_xp(5)
             elif tag_type == "SCHEDULE" and "|" in payload:
                 dt_str, task_text = payload.split("|", 1)
                 dt_str, task_text = dt_str.strip(), task_text.strip()
@@ -191,7 +196,31 @@ def handle_voice(message):
         now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
 
-        prompt = f"""Текущее время в Москве: {now_msk}
+        # Check if it's a journal entry
+        is_journal = False
+        if message.reply_to_message and message.reply_to_message.text and '/journal' in message.reply_to_message.text:
+            is_journal = True
+        elif message.caption and message.caption.startswith('/journal'):
+            is_journal = True
+
+        if is_journal:
+            prompt = f"""Текущее время в Москве: {now_msk}
+Сегодняшняя дата: {today_str}
+
+Пользователь прислал голосовую запись в свой личный дневник (Journal).
+Внимательно прослушай аудиофайл и распознай глубокие размышления Павла.
+
+Act as an empathetic listener and coach. Respond with a short, supportive reply. At the very end of your response, add a new tag: `[MOOD] score/10`, where score is your assessment of their emotional state (1-10).
+
+Помимо тегов, начни свой живой поддерживающий ответ с [ОТВЕТ], чтобы отделить живой ответ от тегов.
+
+Формат ответа:
+[ОТВЕТ]
+Твой ответ пользователю на русском языке
+[MOOD] score/10
+"""
+        else:
+            prompt = f"""Текущее время в Москве: {now_msk}
 Сегодняшняя дата: {today_str}
 
 Долгосрочная память (Memory.md):
@@ -406,6 +435,57 @@ def handle_task_callback(call):
     except Exception as e:
         print(f"[Callback Error] Error handling task callback: {e}")
         bot.answer_callback_query(call.id, "Произошла ошибка при обработке.")
+
+
+@bot.message_handler(commands=['journal'])
+def handle_journal_command(message):
+    if not is_me(message):
+        return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        # Extract journaling text
+        args = message.text.split(maxsplit=1)
+        journal_text = args[1].strip() if len(args) > 1 else ""
+        
+        # If no text in the command, check if they replied to a message
+        if not journal_text and message.reply_to_message:
+            journal_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+            
+        if not journal_text:
+            bot.reply_to(message, "Пожалуйста, напиши свои мысли после команды `/journal` или ответь этой командой на сообщение. Например:\n`/journal Сегодня был прекрасный продуктивный день.`")
+            return
+            
+        now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
+        today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+
+        prompt = f"""Текущее время в Москве: {now_msk}
+Сегодняшняя дата: {today_str}
+
+Пользователь пишет личную рефлексию/дневник (journaling):
+"{journal_text}"
+
+Act as an empathetic listener and coach. Respond with a short, supportive reply. At the very end of your response, add a new tag: `[MOOD] score/10`, where score is your assessment of their emotional state (1-10).
+
+Помимо тегов, начни свой живой поддерживающий ответ с [ОТВЕТ], чтобы отделить живой ответ от тегов.
+
+Формат ответа:
+[ОТВЕТ]
+Твой ответ пользователю коуча на русском языке
+[MOOD] score/10
+"""
+        response = key_manager.generate_content(
+            model=config.MODEL_COMPLEX,
+            contents=prompt
+        )
+        raw_text = response.text
+
+        tags = parse_gemini_tags(raw_text)
+        reply_part = extract_reply(raw_text)
+        apply_gemini_tags(tags)
+
+        bot.reply_to(message, reply_part)
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка записи дневника: {e}")
 
 
 @bot.message_handler(commands=['brain'])

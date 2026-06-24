@@ -15,6 +15,8 @@ from drive_service import (
     get_sleep_chart_data,
     get_expenses_by_category,
     get_habit_completion_array,
+    get_user_profile,
+    add_user_xp,
 )
 
 # Initialize Flask Mini App
@@ -96,6 +98,8 @@ def mark_task_done():
             if unchecked_count == int(task_idx):
                 lines[i] = line.replace("[ ]", "[x]", 1)
                 write_file_to_drive("Tasks.md", "\n".join(lines))
+                # RPG Gamification: Add +10 XP for task completion
+                add_user_xp(10)
                 return jsonify({"success": True})
             unchecked_count += 1
         return jsonify({"success": False, "error": "Task not found"}), 404
@@ -142,6 +146,7 @@ def home():
     sleep_data, sleep_labels, last_sleep = get_sleep_chart_data()
     expense_categories = get_expenses_by_category()
     habit_data = get_habit_completion_array()
+    profile = get_user_profile()
 
     welcome_msg = "Привет, Павел! Рад тебя видеть в Time OS 2.0."
     try:
@@ -168,7 +173,33 @@ def home():
         expense_categories=expense_categories,
         habit_data=habit_data,
         welcome_msg=welcome_msg,
+        profile=profile,
     )
+
+
+@app.route('/api/webhook/external', methods=['POST'])
+def external_webhook():
+    import os
+    expected_key = os.getenv("EXTERNAL_API_KEY", "default_secret_key_123")
+    received_key = request.headers.get('X-External-API-Key')
+    if not received_key:
+        received_key = request.args.get('api_key')
+        
+    if not received_key or received_key != expected_key:
+        return jsonify({"success": False, "error": "Unauthorized: Invalid API Key"}), 401
+        
+    data = request.get_json(silent=True) or {}
+    text = data.get("text", "").strip()
+    if not text:
+        return jsonify({"success": False, "error": "Missing 'text' parameter in payload"}), 400
+        
+    # Import process_external_text dynamically to avoid circular dependencies
+    from bot_handlers import process_external_text
+    res = process_external_text(text)
+    if res.get("success"):
+        return jsonify({"status": "success", "reply": res.get("reply"), "tags": res.get("tags_found")})
+    else:
+        return jsonify({"success": False, "error": res.get("error")}), 500
 
 
 @app.route(f'/webhook/{config.TELEGRAM_TOKEN}', methods=['POST'])

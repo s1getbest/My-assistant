@@ -145,7 +145,9 @@ def track_expense(message):
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
         line = f"* {today_str}: {amount} | {category} | {desc}"
         append_line_to_drive("Finance.md", line)
-        bot.reply_to(message, f"💸 **Расход записан!**\n\n> {amount} ₽ · {category}\n> {desc}")
+        from drive_service import add_user_xp
+        add_user_xp(5)
+        bot.reply_to(message, f"💸 **Расход записан!** (+5 XP)\n\n> {amount} ₽ · {category}\n> {desc}")
     except Exception as e:
         bot.reply_to(message, f"Ошибка записи расхода: {e}")
 
@@ -163,7 +165,9 @@ def track_sleep(message):
         hours = args[1]
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
         append_line_to_drive("Health.md", f"* {today_str}: {hours}")
-        bot.reply_to(message, f"🛌 **Сон записан!**\n\n> {today_str} · {hours} ч.")
+        from drive_service import add_user_xp
+        add_user_xp(5)
+        bot.reply_to(message, f"🛌 **Сон записан!** (+5 XP)\n\n> {today_str} · {hours} ч.")
     except Exception as e:
         bot.reply_to(message, f"Ошибка записи сна: {e}")
 
@@ -346,6 +350,132 @@ def handle_inline_query(inline_query):
         print(f"[Inline Query] Error handling query: {e}")
 
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('task_done:') or call.data.startswith('task_snooze_1h:') or call.data.startswith('task_snooze_24h:'))
+def handle_task_callback(call):
+    """
+    Callback query handler for interactive notifications.
+    """
+    if call.from_user.id != config.MY_TELEGRAM_ID:
+        bot.answer_callback_query(call.id, "Ошибка: Доступ запрещен.", show_alert=True)
+        return
+    try:
+        action, task_text = call.data.split(':', 1)
+        
+        # Remove reply markup (the inline buttons) to prevent double clicks
+        try:
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except Exception:
+            pass
+
+        if action == "task_done":
+            content = read_file_from_drive("Tasks.md")
+            lines = content.split("\n")
+            task_found = False
+            for i, line in enumerate(lines):
+                if "[ ]" in line and task_text in line:
+                    lines[i] = line.replace("[ ]", "[x]", 1)
+                    task_found = True
+                    break
+            
+            if task_found:
+                write_file_to_drive("Tasks.md", "\n".join(lines))
+                from drive_service import add_user_xp
+                add_user_xp(10)
+                bot.answer_callback_query(call.id, "Отмечено как выполнено! +10 XP")
+                bot.send_message(call.message.chat.id, f"✅ Выполнено: **{task_text}** (+10 XP)", parse_mode="Markdown")
+            else:
+                bot.answer_callback_query(call.id, "Задача уже выполнена или не найдена.")
+                bot.send_message(call.message.chat.id, f"✅ Задача выполнена: **{task_text}**", parse_mode="Markdown")
+                
+        elif action in ["task_snooze_1h", "task_snooze_24h"]:
+            import datetime
+            delay_hours = 1 if "1h" in action else 24
+            run_date = datetime.datetime.now(config.msk_tz) + datetime.timedelta(hours=delay_hours)
+            
+            # Import scheduler and job dynamically to prevent circular dependencies
+            from scheduler_jobs import scheduler, send_dynamic_reminder
+            scheduler.add_job(
+                send_dynamic_reminder,
+                'date',
+                run_date=run_date,
+                args=[config.MY_TELEGRAM_ID, task_text],
+            )
+            bot.answer_callback_query(call.id, f"Отложено на {delay_hours} ч.")
+            bot.send_message(call.message.chat.id, f"⏰ Напоминание **{task_text}** успешно отложено на {delay_hours} ч.", parse_mode="Markdown")
+            
+    except Exception as e:
+        print(f"[Callback Error] Error handling task callback: {e}")
+        bot.answer_callback_query(call.id, "Произошла ошибка при обработке.")
+
+
+@bot.message_handler(commands=['brain'])
+def handle_brain_search(message):
+    """
+    RAG-lite global search over Second Brain files using MODEL_COMPLEX.
+    """
+    if not is_me(message):
+        return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        # Extract query text
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            bot.reply_to(message, "Задай вопрос своему Второму Мозгу. Пример: `/brain Как продвигаются мои цели по здоровью?`", parse_mode="Markdown")
+            return
+        query = args[1].strip()
+
+        # Read context files
+        tasks = read_file_from_drive("Tasks.md")
+        finance = read_file_from_drive("Finance.md")
+        health = read_file_from_drive("Health.md")
+        memory = read_file_from_drive("Memory.md")
+        goals = read_file_from_drive("Goals.md")
+
+        # Combine into context, safely truncating each to prevent context limit issues (e.g. max 4000 chars each)
+        def truncate_context(text, max_chars=4000):
+            if len(text) > max_chars:
+                return text[-max_chars:] # take recent part
+            return text
+
+        context = f"""[ФАЙЛ Goals.md]
+{truncate_context(goals)}
+
+[ФАЙЛ Tasks.md]
+{truncate_context(tasks)}
+
+[ФАЙЛ Finance.md]
+{truncate_context(finance)}
+
+[ФАЙЛ Health.md]
+{truncate_context(health)}
+
+[ФАЙЛ Memory.md]
+{truncate_context(memory)}
+"""
+
+        prompt = f"""Ты — ИИ-система "Второй Мозг" пользователя Павла. Твоя задача — проанализировать все файлы его личной базы знаний (Obsidian) и дать развернутый, глубокий и точный ответ на его вопрос.
+Текущее время: {datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")}
+
+Вопрос пользователя: "{query}"
+
+Контекст его базы знаний (файлы из Google Drive):
+---
+{context}
+---
+
+Write a comprehensive, deep, and structured analysis or answer in Russian language. Focus on accuracy and facts. Use formatting to make it readable.
+"""
+        response = key_manager.generate_content(
+            model=config.MODEL_COMPLEX,
+            contents=prompt
+        )
+        reply = response.text.strip()
+        
+        bot.reply_to(message, reply)
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка поиска по Второму Мозгу: {e}")
+
+
 @bot.message_handler(func=lambda message: True)
 def chat_with_gemini(message):
     """
@@ -431,3 +561,68 @@ S1get пишет: "{user_message_text}"
         bot.reply_to(message, reply_part)
     except Exception as e:
         bot.reply_to(message, f"Ошибка: {e}")
+
+
+def process_external_text(text):
+    """
+    Exposes AI tag processing for external requests (Siri/shortcuts).
+    """
+    try:
+        current_memory = read_file_from_drive("Memory.md")
+        if not current_memory.strip():
+            current_memory = "Пока пустая долгосрочная память."
+
+        now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
+        today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+
+        prompt = f"""Текущее время в Москве: {now_msk}
+Сегодняшняя дата: {today_str}
+
+Долгосрочная память (Memory.md):
+---
+{current_memory}
+---
+
+S1get пишет (через Siri/Shortcut): "{text}"
+
+Ответь чётко и по делу. В [ОТВЕТ] — только живой ответ пользователю, без дублирования памяти.
+
+Если из сообщения нужно извлечь данные, добавь в конце ответа ОДНУ строку на каждый тип (только если применимо):
+[TASK] ГГГГ-ММ-ДД ЧЧ:ММ | Описание задачи или рутины
+[FINANCE] ГГГГ-ММ-ДД: сумма | категория | описание
+[HEALTH] ГГГГ-ММ-ДД: часы
+[MEMORY] факт для долгосрочной памяти
+[SCHEDULE] ГГГГ-ММ-ДД ЧЧ:ММ | Текст напоминания
+[QUESTION] Name: суть вопроса
+
+Примеры распознавания:
+- "поспал 8 часов" → [HEALTH] {today_str}: 8
+- "потратил 450р на обед" → [FINANCE] {today_str}: 450 | еда | обед
+- "напомни в 21:00 позвонить маме" → [SCHEDULE] {today_str} 21:00 | Позвонить маме
+- "завтра в 9 утра тренировка" → [TASK] <дата> 09:00 | Тренировка
+
+Формат ответа:
+[ОТВЕТ]
+Твой ответ пользователю
+(далее теги, если нужны — каждый с новой строки)
+"""
+        response = key_manager.generate_content(
+            model=config.MODEL_LITE,
+            contents=prompt
+        )
+        raw_text = response.text
+
+        tags = parse_gemini_tags(raw_text)
+        reply_part = extract_reply(raw_text)
+        apply_gemini_tags(tags)
+        return {
+            "success": True,
+            "reply": reply_part,
+            "tags_found": [t[0] for t in tags]
+        }
+    except Exception as e:
+        print(f"[External Process] Error: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }

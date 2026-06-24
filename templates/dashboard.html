@@ -25,7 +25,18 @@
                 <h1 class="text-sm font-bold tracking-wide">Time OS</h1>
                 <p class="text-[10px] text-indigo-400">{{ today_label }}</p>
             </div>
-            <div class="w-9 h-9 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold shadow-lg shadow-indigo-500/30">ПВ</div>
+            <!-- RPG Level & Progress Bar -->
+            <div class="flex items-center gap-3">
+                <div class="text-right">
+                    <span class="text-[9px] font-bold text-indigo-400 uppercase tracking-wider bg-indigo-500/10 px-1.5 py-0.5 rounded-full">Lvl {{ profile.level }}</span>
+                    <!-- XP progress mini bar -->
+                    <div class="w-16 h-1 bg-slate-800 rounded-full mt-1 overflow-hidden">
+                        <div class="bg-indigo-500 h-full rounded-full" style="width: {{ profile.xp % 100 }}%"></div>
+                    </div>
+                    <span class="text-[8px] text-slate-500 block mt-0.5">{{ profile.xp % 100 }}/100 XP</span>
+                </div>
+                <div class="w-9 h-9 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold shadow-lg shadow-indigo-500/30">ПВ</div>
+            </div>
         </div>
     </header>
 

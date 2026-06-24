@@ -22,7 +22,14 @@ def send_dynamic_reminder(chat_id, task_text):
     except Exception:
         reply = f"Пора делать: {task_text}"
     try:
-        bot.send_message(chat_id, f"⏰ **НАПОМИНАНИЕ!**\n\n{reply}")
+        import telebot
+        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+        btn_done = telebot.types.InlineKeyboardButton("✅ Done", callback_data=f"task_done:{task_text[:45]}")
+        btn_snooze_1h = telebot.types.InlineKeyboardButton("⏰ Snooze 1h", callback_data=f"task_snooze_1h:{task_text[:45]}")
+        btn_snooze_24h = telebot.types.InlineKeyboardButton("📅 Tomorrow", callback_data=f"task_snooze_24h:{task_text[:45]}")
+        markup.add(btn_done, btn_snooze_1h, btn_snooze_24h)
+        
+        bot.send_message(chat_id, f"⏰ **НАПОМИНАНИЕ!**\n\n{reply}", reply_markup=markup)
     except Exception as e:
         print(f"[Scheduler] Dynamic reminder send error: {e}")
 
@@ -142,6 +149,31 @@ Review the user's long-term goals. Suggest ONE small, actionable task for today 
             config.MY_TELEGRAM_ID,
             f"☀️ **ЕЖЕДНЕВНЫЙ УТРЕННИЙ БРИФИНГ**\n\n{brief_reply}"
         )
+        
+        # Text-to-Speech Morning Podcast generation
+        audio_path = "morning_podcast.mp3"
+        try:
+            print("[Scheduler] Starting Morning Podcast synthesis...")
+            import asyncio
+            import edge_tts
+            
+            async def generate_podcast():
+                clean_text = brief_reply.replace("**", "").replace("*", "").replace("##", "").replace("#", "").replace("[ ]", "").replace("[x]", "")
+                communicate = edge_tts.Communicate(clean_text, "ru-RU-DmitryNeural")
+                await communicate.save(audio_path)
+                
+            asyncio.run(generate_podcast())
+            
+            with open(audio_path, 'rb') as audio_file:
+                bot.send_voice(
+                    config.MY_TELEGRAM_ID,
+                    audio_file,
+                    caption="🌅 Your Morning Podcast"
+                )
+            print("[Scheduler] Morning Podcast successfully generated and sent.")
+        except Exception as tts_err:
+            print(f"[Scheduler] TTS Podcast generation/send failed: {tts_err}")
+            
         print("[Scheduler] Morning briefing successfully sent.")
     except Exception as e:
         print(f"[Scheduler] Error generating morning briefing: {e}")

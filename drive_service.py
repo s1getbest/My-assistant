@@ -342,3 +342,35 @@ def read_or_create_goals():
         content = "# Мои долгосрочные цели\n\n* Улучшить здоровье и сон\n* Вести учет финансов\n* Повысить продуктивность"
         write_file_to_drive("Goals.md", content)
     return content
+
+
+def get_user_profile():
+    """
+    Reads Profile.json from Google Drive. If it doesn't exist, initializes it.
+    """
+    try:
+        content = read_file_from_drive("Profile.json")
+        if not content.strip():
+            profile = {"xp": 0, "level": 1}
+            write_file_to_drive("Profile.json", json.dumps(profile))
+            return profile
+        return json.loads(content)
+    except Exception as e:
+        print(f"[Profile] Error reading profile: {e}")
+        return {"xp": 0, "level": 1}
+
+
+def add_user_xp(amount):
+    """
+    Adds XP to the user profile and calculates the new level.
+    """
+    try:
+        profile = get_user_profile()
+        profile["xp"] = profile.get("xp", 0) + amount
+        profile["level"] = max(1, int(profile["xp"] / 100))
+        write_file_to_drive("Profile.json", json.dumps(profile))
+        print(f"[Profile] Added {amount} XP. Current XP: {profile['xp']}, Level: {profile['level']}")
+        return profile
+    except Exception as e:
+        print(f"[Profile] Error adding XP: {e}")
+        return {"xp": 0, "level": 1}

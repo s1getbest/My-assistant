@@ -879,6 +879,10 @@ def chat_with_gemini(message):
         if not current_memory.strip():
             current_memory = "Пока пустая долгосрочная память."
 
+        current_tasks = read_file_from_drive("Tasks.md")
+        if not current_tasks.strip():
+            current_tasks = "Пока нет задач."
+
         now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
 
@@ -930,7 +934,14 @@ def chat_with_gemini(message):
 {current_memory}
 ---
 
+Задачи пользователя (Tasks.md):
+---
+{current_tasks}
+---
+
 S1get пишет: "{user_message_text}"
+
+You have access to the user's tasks (Tasks.md). If the user asks about their schedule, plans, or what they have to do today/tomorrow/this week, analyze the Tasks.md list and give them a precise answer.
 
 Ответь чётко и по делу. В [ОТВЕТ] — только живой ответ пользователю, без дублирования памяти.
 

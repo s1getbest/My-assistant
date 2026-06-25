@@ -33,7 +33,6 @@ def validate_telegram_data(init_data):
         vals = {
             k: urllib.parse.unquote(v)
             for k, v in [s.split('=', 1) for s in init_data.split('&')]
-        }
         if 'hash' not in vals:
             return False
         data_check_string = '\n'.join(
@@ -83,20 +82,17 @@ def mark_task_done():
 @app.route('/manifest.json')
 def get_pwa_manifest():
     manifest = {
-        "short_name": "Time OS",
-        "name": "Time OS 2.0 Dashboard",
-        "icons": [
-            {
-                "src": "https://cdn-icons-png.flaticon.com/512/1162/1162456.png",
-                "type": "image/png",
-                "sizes": "512x512"
-            }
-        ],
-        "start_url": "/?pwa=true",
-        "background_color": "#020617",
-        "theme_color": "#6366f1",
+        "name": "Time OS",
+        "short_name": "TimeOS",
         "display": "standalone",
-        "orientation": "portrait"
+        "background_color": "#020617",
+        "theme_color": "#4f46e5",
+        "start_url": "/",
+        "icons": [{
+            "src": "https://cdn-icons-png.flaticon.com/512/8342/8342207.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        }]
     }
     return jsonify(manifest)
 
@@ -330,3 +326,4 @@ def webhook():
     update = telebot.types.Update.de_json(json_str)
     bot.process_new_updates([update])
     return '!', 200
+

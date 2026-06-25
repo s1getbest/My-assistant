@@ -12,13 +12,8 @@ class FallbackResponse:
 class APIKeyManager:
     def __init__(self):
         self.lock = threading.Lock()
-        self._keys = []
-        for key_val in [config.GEMINI_KEY_1, config.GEMINI_KEY_2, config.GEMINI_KEY_3]:
-            if key_val:
-                self._keys.append(key_val)
+        self._keys = config.GEMINI_KEYS
 
-        if not self._keys and config.GEMINI_API_KEY:
-            self._keys.append(config.GEMINI_API_KEY)
 
         self._current_index = 0
 
@@ -28,7 +23,7 @@ class APIKeyManager:
         """
         with self.lock:
             if not self._keys:
-                raise RuntimeError("No Gemini API keys configured. Set GEMINI_KEY_1, GEMINI_KEY_2, GEMINI_KEY_3 or GEMINI_API_KEY.")
+                raise RuntimeError("No Gemini API keys configured. Set GEMINI_KEY_1 through GEMINI_KEY_5 or GEMINI_API_KEY.")
             active_key = self._keys[self._current_index]
             return genai.Client(api_key=active_key)
 

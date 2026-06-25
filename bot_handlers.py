@@ -3,6 +3,7 @@ from datetime import datetime
 import telebot
 from google.genai import types
 from uuid import uuid4
+import threading
 import config
 from bot_instance import bot
 from key_manager import key_manager
@@ -219,6 +220,95 @@ def get_forward_sender_name(message):
     except Exception as e:
         print(f"[Forwards] Error getting forward sender name: {e}")
     return "Unknown Sender"
+
+
+# === MULTI-AGENT PIPELINE ===
+
+def agent_router(user_message):
+    """
+    Agent Router: Uses MODEL_LITE to classify user intent.
+    Returns EXACTLY ONE word: TASK, FINANCE, HEALTH, QUESTION, or NOTE.
+    """
+    try:
+        prompt = apply_format_rule(f"""Analyze the user's message. Output EXACTLY ONE word: TASK, FINANCE, HEALTH, QUESTION, or NOTE.
+
+User message: "{user_message}"
+""")
+        response = key_manager.generate_content(
+            model=config.MODEL_LITE,
+            contents=prompt
+        )
+        classification = response.text.strip().upper()
+        valid_classes = ["TASK", "FINANCE", "HEALTH", "QUESTION", "NOTE"]
+        if classification not in valid_classes:
+            classification = "QUESTION"
+        print(f"[Agent Router] Classified as: {classification}")
+        return classification
+    except Exception as e:
+        print(f"[Agent Router] Error: {e}")
+        return "QUESTION"
+
+
+def agent_archivist(user_message):
+    """
+    Agent Archivist: Uses MODEL_COMPLEX to format user's thought into Zettelkasten note.
+    Output: [NOTE] Category | Formatted Text with [[wikilinks]] and #tags.
+    """
+    try:
+        prompt = apply_format_rule(f"""Format the user's thought into a Zettelkasten note. Add Obsidian [[wikilinks]] for key entities, and generate appropriate #tags. Output: [NOTE] Category | Formatted Text.
+
+User thought: "{user_message}"
+""")
+        response = key_manager.generate_content(
+            model=config.MODEL_COMPLEX,
+            contents=prompt
+        )
+        return response.text.strip()
+    except Exception as e:
+        print(f"[Agent Archivist] Error: {e}")
+        return None
+
+
+def agent_tutor_background(note_text):
+    """
+    Agent Tutor (Background): Uses MODEL_COMPLEX to generate Anki flashcard from note.
+    Runs in background thread to avoid blocking Telegram reply.
+    Output: [CARD] Question | Answer
+    """
+    def generate_flashcard():
+        try:
+            prompt = apply_format_rule(f"""Create a Q&A flashcard based on this note. Output: [CARD] Question | Answer.
+
+Note: "{note_text}"
+""")
+            response = key_manager.generate_content(
+                model=config.MODEL_COMPLEX,
+                contents=prompt
+            )
+            card_text = response.text.strip()
+            
+            # Parse and save flashcard
+            if "[CARD]" in card_text and "|" in card_text:
+                card_body = card_text.split("[CARD]", 1)[1].strip()
+                if "|" in card_body:
+                    question, answer = card_body.split("|", 1)
+                    flashcards = read_json_from_drive("Flashcards.json")
+                    if not isinstance(flashcards, list):
+                        flashcards = []
+                    flashcards.append({
+                        "id": str(uuid4()),
+                        "q": question.strip(),
+                        "a": answer.strip(),
+                        "next_review": datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M:%S"),
+                    })
+                    write_json_to_drive("Flashcards.json", flashcards)
+                    print(f"[Agent Tutor] Flashcard generated and saved")
+        except Exception as e:
+            print(f"[Agent Tutor] Error: {e}")
+    
+    thread = threading.Thread(target=generate_flashcard)
+    thread.daemon = True
+    thread.start()
 
 
 # === BOT HANDLERS ===
@@ -776,9 +866,10 @@ Inbox.md:
 @bot.message_handler(func=lambda message: True)
 def chat_with_gemini(message):
     """
-    Handles general chat with dynamic routing:
-    - MODEL_LITE for short inputs (< 40 chars)
-    - MODEL_COMPLEX for complex inputs (>= 40 chars, or forwarded messages)
+    Handles general chat with Multi-Agent Pipeline:
+    - Agent Router: Uses MODEL_LITE to classify intent
+    - Agent Archivist: If NOTE, uses MODEL_COMPLEX to format Zettelkasten note
+    - Agent Tutor: Background thread generates flashcard from saved NOTE
     """
     if not is_me(message):
         return
@@ -799,7 +890,29 @@ def chat_with_gemini(message):
         else:
             user_message_text = message.text
 
-        # Dynamic model selection
+        # Multi-Agent Pipeline: Router
+        classification = agent_router(user_message_text)
+        print(f"[Multi-Agent Pipeline] Router classified as: {classification}")
+
+        # If NOTE, use Archivist agent
+        if classification == "NOTE":
+            note_output = agent_archivist(user_message_text)
+            if note_output and "[NOTE]" in note_output:
+                # Parse and save the note
+                tags = parse_gemini_tags(note_output)
+                apply_gemini_tags(tags)
+                
+                # Extract note text for background Tutor
+                if "|" in note_output:
+                    note_body = note_output.split("|", 1)[1].strip()
+                    # Trigger background Agent Tutor
+                    agent_tutor_background(note_body)
+                
+                reply_part = f"📝 Заметка сохранена: {note_output.replace('[NOTE]', '').strip()}"
+                bot.reply_to(message, reply_part)
+                return
+
+        # For other classifications, use standard flow
         text_len = len(message.text) if message.text else 0
         if is_forwarded or text_len >= 40:
             selected_model = config.MODEL_COMPLEX
@@ -845,6 +958,12 @@ S1get пишет: "{user_message_text}"
         tags = parse_gemini_tags(raw_text)
         reply_part = extract_reply(raw_text)
         apply_gemini_tags(tags)
+
+        # Check if a NOTE was generated in the standard flow
+        for tag_type, payload in tags:
+            if tag_type == "NOTE" and "|" in payload:
+                note_body = payload.split("|", 1)[1].strip()
+                agent_tutor_background(note_body)
 
         bot.reply_to(message, reply_part)
     except Exception as e:

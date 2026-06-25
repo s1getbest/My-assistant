@@ -45,17 +45,6 @@
 
         <!-- TAB 0: OVERVIEW -->
         <div id="tab-overview" class="tab-panel">
-            <!-- Quote/Insight of the Day -->
-            {% if insight_msg %}
-            <div class="bg-gradient-to-br from-amber-500/10 to-orange-500/5 rounded-2xl border border-amber-500/20 p-5 mb-4 shadow-lg shadow-amber-500/5 animate-[fadeIn_0.3s_ease]">
-                <div class="flex items-center gap-2 mb-2">
-                    <span class="text-lg">✨</span>
-                    <p class="text-[10px] font-bold text-amber-400 uppercase tracking-wider">Мысль дня</p>
-                </div>
-                <p class="text-sm font-semibold text-amber-100 leading-relaxed">"{{ insight_msg }}"</p>
-            </div>
-            {% endif %}
-
             <!-- Welcome Card -->
             <div class="bg-gradient-to-br from-indigo-950/40 to-slate-900 rounded-2xl border border-indigo-500/20 p-5 mb-4">
                 <div class="flex items-center gap-3 mb-2">
@@ -186,6 +175,35 @@
             </div>
         </div>
 
+        <!-- TAB 4: STUDY -->
+        <div id="tab-study" class="tab-panel hidden">
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                <div class="flex items-center gap-2 mb-3">
+                    <span class="text-lg">🎓</span>
+                    <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Study</h2>
+                </div>
+                <div id="study-empty" class="text-sm text-slate-500 text-center py-8 hidden">All caught up! 🎉</div>
+                <div id="study-card" class="hidden">
+                    <p class="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-2">Вопрос</p>
+                    <p id="study-question" class="text-base font-semibold leading-relaxed text-slate-100"></p>
+                    <div id="study-answer-wrap" class="hidden mt-4 border-t border-slate-800 pt-4">
+                        <p class="text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-2">Ответ</p>
+                        <p id="study-answer" class="text-sm leading-relaxed text-emerald-100"></p>
+                    </div>
+                    <button id="show-answer-btn" onclick="showFlashcardAnswer()" class="mt-4 w-full bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold py-2.5 rounded-xl transition-colors">
+                        Show Answer
+                    </button>
+                    <div id="study-actions" class="hidden mt-4 grid grid-cols-2 gap-2">
+                        <button onclick="reviewFlashcard(0.016)" class="bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold py-2 rounded-lg">Снова (1 мин)</button>
+                        <button onclick="reviewFlashcard(6)" class="bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold py-2 rounded-lg">Позже (6 ч)</button>
+                        <button onclick="reviewFlashcard(24)" class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold py-2 rounded-lg">Завтра (1 дн)</button>
+                        <button onclick="reviewFlashcard(168)" class="bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold py-2 rounded-lg">Неделя (7 дн)</button>
+                        <button onclick="reviewFlashcard(720)" class="col-span-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold py-2 rounded-lg">Месяц (30 дн)</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </main>
 
     <!-- Bottom Nav -->
@@ -211,6 +229,11 @@
                 <span class="text-[9px] font-semibold uppercase tracking-wide">Health</span>
                 <span class="nav-dot w-1 h-1 rounded-full bg-indigo-400"></span>
             </button>
+            <button onclick="switchTab('study')" id="nav-study" class="nav-btn flex flex-col items-center gap-0.5 px-4 py-1 text-slate-500 transition-colors">
+                <span class="text-xl">🎓</span>
+                <span class="text-[9px] font-semibold uppercase tracking-wide">Study</span>
+                <span class="nav-dot w-1 h-1 rounded-full bg-indigo-400"></span>
+            </button>
         </div>
     </nav>
 
@@ -221,9 +244,10 @@
             document.body.style.backgroundColor = '#020617';
         }
 
-        const TABS = ['overview', 'tasks', 'finance', 'health'];
+        const TABS = ['overview', 'tasks', 'finance', 'health', 'study'];
         let chartInstance = null;
         let financeChartInstance = null;
+        let currentFlashcard = null;
 
         function getTelegramInitData() {
             return window.Telegram?.WebApp?.initData || '';
@@ -236,6 +260,7 @@
             });
             if (name === 'health' && !chartInstance) initChart();
             if (name === 'finance' && !financeChartInstance) initFinanceChart();
+            if (name === 'study') loadFlashcard();
         }
 
         function initFinanceChart() {
@@ -354,6 +379,77 @@
             } finally {
                 btn.disabled = false;
                 btn.innerHTML = '<span>Focus Now ⚡</span>';
+            }
+        }
+
+        async function loadFlashcard() {
+            const emptyState = document.getElementById('study-empty');
+            const cardWrap = document.getElementById('study-card');
+            const answerWrap = document.getElementById('study-answer-wrap');
+            const actions = document.getElementById('study-actions');
+            const showAnswerBtn = document.getElementById('show-answer-btn');
+            const question = document.getElementById('study-question');
+            const answer = document.getElementById('study-answer');
+
+            answerWrap.classList.add('hidden');
+            actions.classList.add('hidden');
+            showAnswerBtn.classList.add('hidden');
+
+            try {
+                const res = await fetch('/api/flashcards', {
+                    headers: {
+                        'Authorization': getTelegramInitData()
+                    }
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Failed');
+
+                currentFlashcard = data.card;
+                if (!currentFlashcard) {
+                    cardWrap.classList.add('hidden');
+                    emptyState.classList.remove('hidden');
+                    return;
+                }
+
+                question.textContent = currentFlashcard.q || '—';
+                answer.textContent = currentFlashcard.a || '—';
+                emptyState.classList.add('hidden');
+                cardWrap.classList.remove('hidden');
+                showAnswerBtn.classList.remove('hidden');
+            } catch (e) {
+                currentFlashcard = null;
+                cardWrap.classList.add('hidden');
+                emptyState.textContent = 'Ошибка загрузки карточки: ' + e.message;
+                emptyState.classList.remove('hidden');
+            }
+        }
+
+        function showFlashcardAnswer() {
+            if (!currentFlashcard) return;
+            document.getElementById('study-answer-wrap').classList.remove('hidden');
+            document.getElementById('study-actions').classList.remove('hidden');
+            document.getElementById('show-answer-btn').classList.add('hidden');
+        }
+
+        async function reviewFlashcard(intervalHours) {
+            if (!currentFlashcard) return;
+            try {
+                const res = await fetch('/api/flashcards/review', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': getTelegramInitData()
+                    },
+                    body: JSON.stringify({
+                        id: currentFlashcard.id,
+                        interval_hours: intervalHours
+                    })
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Failed');
+                await loadFlashcard();
+            } catch (e) {
+                showToast('Ошибка повторения: ' + e.message);
             }
         }
 

@@ -10,7 +10,9 @@ import telebot
 from drive_service import (
     append_line_to_drive,
     read_file_from_drive,
+    read_json_from_drive,
     write_file_to_drive,
+    write_json_to_drive,
     get_today_tasks,
     get_monthly_expenses,
     get_sleep_chart_data,
@@ -145,7 +147,6 @@ def home():
     expense_categories = {}
     habit_data = []
     profile = {"xp": 0, "level": 1}
-    insight_msg = "Have a great day, Pavel! ✨"
     welcome_msg = "Привет, Павел! Рад тебя видеть в Time OS 2.0."
 
     # Fetch with individual try-except blocks
@@ -200,13 +201,6 @@ def home():
         profile = {"xp": 0, "level": 1}
 
     try:
-        content = read_file_from_drive("Insight.md")
-        if content and content.strip():
-            insight_msg = content.strip()
-    except Exception as e:
-        print(f"[Dashboard] Error reading insight: {e}")
-
-    try:
         from key_manager import key_manager
         current_memory = read_file_from_drive("Memory.md")
         if current_memory:
@@ -232,7 +226,6 @@ def home():
         habit_data=habit_data,
         welcome_msg=welcome_msg,
         profile=profile,
-        insight_msg=insight_msg,
     )
 
 
@@ -260,6 +253,73 @@ def external_webhook():
             return jsonify({"success": False, "error": "Failed to append to Raw_Inbox.md"}), 500
 
         return jsonify({"success": True, "status": "queued", "stored": inbox_line})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/flashcards', methods=['GET'])
+def get_due_flashcard():
+    try:
+        init_data = request.headers.get('Authorization')
+        if not validate_telegram_data(init_data):
+            return jsonify({"success": False, "error": "Unauthorized"}), 403
+
+        flashcards = read_json_from_drive("Flashcards.json")
+        if not isinstance(flashcards, list):
+            flashcards = []
+
+        now = datetime.now(config.msk_tz)
+        due_cards = []
+        for card in flashcards:
+            try:
+                review_dt = datetime.strptime(card.get("next_review", ""), "%Y-%m-%d %H:%M:%S")
+                review_dt = config.msk_tz.localize(review_dt)
+                if review_dt <= now:
+                    due_cards.append((review_dt, card))
+            except Exception:
+                continue
+
+        due_cards.sort(key=lambda item: item[0])
+        if not due_cards:
+            return jsonify({"success": True, "card": None})
+        return jsonify({"success": True, "card": due_cards[0][1]})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/flashcards/review', methods=['POST'])
+def review_flashcard():
+    try:
+        init_data = request.headers.get('Authorization')
+        if not validate_telegram_data(init_data):
+            return jsonify({"success": False, "error": "Unauthorized"}), 403
+
+        data = request.get_json(silent=True) or {}
+        card_id = data.get("id")
+        interval_hours = data.get("interval_hours")
+        if not card_id or interval_hours is None:
+            return jsonify({"success": False, "error": "id and interval_hours required"}), 400
+
+        interval_hours = float(interval_hours)
+        flashcards = read_json_from_drive("Flashcards.json")
+        if not isinstance(flashcards, list):
+            flashcards = []
+
+        updated = False
+        next_review = datetime.now(config.msk_tz) + timedelta(hours=interval_hours)
+        for card in flashcards:
+            if card.get("id") == card_id:
+                card["next_review"] = next_review.strftime("%Y-%m-%d %H:%M:%S")
+                updated = True
+                break
+
+        if not updated:
+            return jsonify({"success": False, "error": "Card not found"}), 404
+
+        if not write_json_to_drive("Flashcards.json", flashcards):
+            return jsonify({"success": False, "error": "Failed to save flashcards"}), 500
+
+        return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 

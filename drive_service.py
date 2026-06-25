@@ -118,6 +118,33 @@ def write_file_to_drive(filename, content):
     raise last_err
 
 
+def read_json_from_drive(filename):
+    try:
+        content = read_file_from_drive(filename).strip()
+        if not content:
+            default_data = [] if filename == "Flashcards.json" else {}
+            write_json_to_drive(filename, default_data)
+            return default_data
+        return json.loads(content)
+    except Exception as e:
+        print(f"[Drive] Read JSON error for {filename}: {e}")
+        default_data = [] if filename == "Flashcards.json" else {}
+        try:
+            write_json_to_drive(filename, default_data)
+        except Exception as write_err:
+            print(f"[Drive] Failed to initialize JSON file {filename}: {write_err}")
+        return default_data
+
+
+def write_json_to_drive(filename, data):
+    try:
+        write_file_to_drive(filename, json.dumps(data, ensure_ascii=False, indent=2))
+        return True
+    except Exception as e:
+        print(f"[Drive] Write JSON error for {filename}: {e}")
+        return False
+
+
 def append_line_to_drive(filename, line):
     try:
         current = read_file_from_drive(filename)

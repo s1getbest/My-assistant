@@ -8,21 +8,33 @@ from key_manager import key_manager
 from drive_service import (
     get_today_tasks,
     get_task_line_token,
+    read_json_from_drive,
     read_file_from_drive,
     read_or_create_goals,
-    write_file_to_drive,
 )
 
 # Initialize BackgroundScheduler with Moscow Timezone
 scheduler = BackgroundScheduler(timezone=config.msk_tz)
 TASK_LINE_RE = re.compile(r'^\s*[\*\-]?\s*\[(?P<status>[ xX])\]\s*(?P<body>.+)$')
 TASK_DATETIME_RE = re.compile(r'(?P<dt>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*\|\s*(?P<text>.+)$')
+TELEGRAM_FORMAT_RULE = (
+    "IMPORTANT FORMATTING RULE: Do NOT use double asterisks `**` for bolding under any "
+    "circumstances. Telegram does not support it. Use standard single asterisks `*` or avoid bolding entirely."
+)
 
 
 def _normalize_run_date(run_date):
     if run_date.tzinfo is None:
         return config.msk_tz.localize(run_date)
     return run_date.astimezone(config.msk_tz)
+
+
+def apply_format_rule(prompt):
+    return f"{prompt}\n\n{TELEGRAM_FORMAT_RULE}"
+
+
+def sanitize_telegram_text(text):
+    return (text or "").replace("**", "*").strip()
 
 
 def _clean_reminder_text(task_text):
@@ -103,12 +115,14 @@ def send_dynamic_reminder(chat_id, task_text, task_line=None):
     Triggers dynamic reminders registered by users. Uses MODEL_COMPLEX.
     """
     try:
-        prompt = f"Ты личный строгий ассистент Павел. Сработало напоминание: '{task_text}'. Напиши короткое, очень емкое и мотивирующее сообщение прямо сейчас."
+        prompt = apply_format_rule(
+            f"Ты личный строгий ассистент Павел. Сработало напоминание: '{task_text}'. Напиши короткое, очень емкое и мотивирующее сообщение прямо сейчас."
+        )
         response = key_manager.generate_content(
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
-        reply = response.text
+        reply = sanitize_telegram_text(response.text)
     except Exception:
         reply = f"Пора делать: {task_text}"
     try:
@@ -168,7 +182,7 @@ def compress_memory():
             print("[Scheduler] Memory.md is empty, skipping compression.")
             return
 
-        prompt = f"""This is a long-term memory file. Compress it, remove duplicates, and keep only the most important facts as a concise list.
+        prompt = apply_format_rule(f"""This is a long-term memory file. Compress it, remove duplicates, and keep only the most important facts as a concise list.
 
 Current content:
 ---
@@ -176,12 +190,12 @@ Current content:
 ---
 
 Output only the resulting compressed list in Markdown format (using bullet points like "* fact"). Do not include any intro, outro, or additional conversational text.
-"""
+""")
         response = key_manager.generate_content(
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
-        compressed_text = response.text.strip()
+        compressed_text = sanitize_telegram_text(response.text)
 
         if compressed_text:
             write_file_to_drive("Memory.md", compressed_text)
@@ -254,6 +268,8 @@ def morning_briefing():
         today_tasks = get_today_tasks()
         current_memory = read_file_from_drive("Memory.md")
         goals_content = read_or_create_goals()
+        flashcards = read_json_from_drive("Flashcards.json")
+        now = datetime.now(config.msk_tz)
         
         # Format today's tasks
         tasks_text = ""
@@ -264,11 +280,35 @@ def morning_briefing():
         else:
             tasks_text = "Нет запланированных задач на сегодня."
 
-        prompt = f"""Ты личный строгий и заботливый ассистент Павел. Твоя задача — составить мотивирующий и структурированный утренний брифинг для Павла.
-Сегодняшняя дата: {datetime.now(config.msk_tz).strftime('%Y-%m-%d')}
+        review_cards = []
+        if isinstance(flashcards, list):
+            sortable_cards = []
+            for card in flashcards:
+                try:
+                    review_dt = datetime.strptime(card.get("next_review", ""), "%Y-%m-%d %H:%M:%S")
+                    review_dt = config.msk_tz.localize(review_dt)
+                    sortable_cards.append((review_dt, card))
+                except Exception:
+                    continue
+            sortable_cards.sort(key=lambda item: item[0])
+            overdue = [card for review_dt, card in sortable_cards if review_dt <= now]
+            review_cards = overdue[:2]
+
+        review_text = "Нет карточек для повторения."
+        if review_cards:
+            review_text = "\n".join(
+                f"🧠 Повторение: {card.get('q', '—')} -> {card.get('a', '—')}"
+                for card in review_cards
+            )
+
+        prompt = apply_format_rule(f"""Ты личный строгий и заботливый ассистент Павел. Твоя задача — составить мотивирующий и структурированный утренний брифинг для Павла.
+Сегодняшняя дата: {now.strftime('%Y-%m-%d')}
 
 Список сегодняшних задач:
 {tasks_text}
+
+Карточки для повторения:
+{review_text}
 
 Долгосрочная память (Memory.md):
 ---
@@ -282,58 +322,26 @@ def morning_briefing():
 
 Review the user's long-term goals. Suggest ONE small, actionable task for today that moves them closer to these goals, and include it in your briefing message.
 
-Напиши короткий, мотивирующий брифинг на русском языке. Отметь ключевые дела, предложи одну маленькую конкретную сегодняшнюю задачу для достижения его долгосрочных целей, дай одну мудрую или практичную мысль дня и пожелай продуктивного дня. Будь краток и пиши по делу.
-
-В самом конце ответа добавь специальный тег:
-[INSIGHT] Короткое (до 10 слов), глубокое, вдохновляющее напутствие на этот день.
-"""
+Напиши короткий, мотивирующий брифинг на русском языке. Отметь ключевые дела, добавь блок повторения, предложи одну маленькую конкретную сегодняшнюю задачу для достижения его долгосрочных целей и пожелай продуктивного дня. Будь краток и пиши по делу.
+""")
         response = key_manager.generate_content(
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
-        brief_reply = response.text.strip()
-        
-        # Extract dynamic insight
-        import re
-        insight_match = re.search(r'\[INSIGHT\]\s*(.+)$', brief_reply, re.MULTILINE)
-        insight_text = "Сделай сегодняшний день шедевром! ✨"
-        if insight_match:
-            insight_text = insight_match.group(1).strip()
-            brief_reply_clean = re.sub(r'\[INSIGHT\].*$', '', brief_reply, flags=re.MULTILINE).strip()
-        else:
-            brief_reply_clean = brief_reply
-            
-        write_file_to_drive("Insight.md", insight_text)
+        brief_reply_clean = sanitize_telegram_text(response.text)
+
+        if review_cards:
+            review_block = "\n".join(
+                f"🧠 Повторение: {card.get('q', '—')} -> {card.get('a', '—')}"
+                for card in review_cards
+            )
+            brief_reply_clean = f"{brief_reply_clean}\n\n{review_block}"
         
         bot.send_message(
             config.MY_TELEGRAM_ID,
-            f"☀️ **ЕЖЕДНЕВНЫЙ УТРЕННИЙ БРИФИНГ**\n\n{brief_reply_clean}"
+            f"☀️ ЕЖЕДНЕВНЫЙ УТРЕННИЙ БРИФИНГ\n\n{brief_reply_clean}"
         )
-        
-        # Text-to-Speech Morning Podcast generation
-        audio_path = "morning_podcast.mp3"
-        try:
-            print("[Scheduler] Starting Morning Podcast synthesis...")
-            import asyncio
-            import edge_tts
-            
-            async def generate_podcast():
-                clean_text = brief_reply.replace("**", "").replace("*", "").replace("##", "").replace("#", "").replace("[ ]", "").replace("[x]", "")
-                communicate = edge_tts.Communicate(clean_text, "ru-RU-DmitryNeural")
-                await communicate.save(audio_path)
-                
-            asyncio.run(generate_podcast())
-            
-            with open(audio_path, 'rb') as audio_file:
-                bot.send_voice(
-                    config.MY_TELEGRAM_ID,
-                    audio_file,
-                    caption="🌅 Your Morning Podcast"
-                )
-            print("[Scheduler] Morning Podcast successfully generated and sent.")
-        except Exception as tts_err:
-            print(f"[Scheduler] TTS Podcast generation/send failed: {tts_err}")
-            
+
         print("[Scheduler] Morning briefing successfully sent.")
     except Exception as e:
         print(f"[Scheduler] Error generating morning briefing: {e}")
@@ -367,7 +375,7 @@ def weekly_audit():
         finance_7d = filter_last_7_days(finance_content, dates)
         health_7d = filter_last_7_days(health_content, dates)
         
-        prompt = f"""Act as a strict but supportive life coach. Analyze this 7-day data.
+        prompt = apply_format_rule(f"""Act as a strict but supportive life coach. Analyze this 7-day data.
 Summarize spending, average sleep, and task completion. Provide 1 actionable insight and ask for next week's goals.
 
 Here is the data for the past 7 days (dates: {', '.join(dates[::-1])}):
@@ -388,12 +396,12 @@ Here is the data for the past 7 days (dates: {', '.join(dates[::-1])}):
 ---
 
 Write a comprehensive, professional, yet warm and inspiring Markdown report. Deliver direct feedback as a dedicated coach. Use clear headings, list structures, and highlighted insights.
-"""
+""")
         response = key_manager.generate_content(
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
-        report = response.text.strip()
+        report = sanitize_telegram_text(response.text)
         
         # Append anti-burnout stat
         report += f"\n\n🧊 Moved {archived_count} stale tasks to the Icebox."

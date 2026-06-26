@@ -4,6 +4,7 @@ import config
 from bot_instance import bot
 from scheduler_jobs import restore_reminders_on_startup, scheduler
 from dashboard import app
+from drive_service import initialize_folder_mapping
 
 # Import handlers to ensure all bot command & message routes are registered
 import bot_handlers
@@ -21,7 +22,12 @@ def restore_reminders_background():
 
 if __name__ == "__main__":
     print("[Main] Starting Telegram Bot & Flask Dashboard (Modular Edition)...")
-    
+
+    # === INITIALIZE FOLDER MAPPING ===
+    print("[Main] Initializing Obsidian folder mapping...")
+    initialize_folder_mapping()
+    print("[Main] Folder mapping initialized.")
+
     # === WEBHOOK SETUP ===
     WEBHOOK_URL = f"https://my-assistant-k7rq.onrender.com/webhook/{config.TELEGRAM_TOKEN}"
     print(f"[Main] Setting Telegram webhook to: {WEBHOOK_URL}")

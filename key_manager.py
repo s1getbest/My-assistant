@@ -13,9 +13,8 @@ class APIKeyManager:
     def __init__(self):
         self.lock = threading.Lock()
         self._keys = config.GEMINI_KEYS
-
-
         self._current_index = 0
+        print(f"[KeyManager] Initialized with {len(self._keys)} API keys from dynamic pool")
 
     def get_client(self):
         """
@@ -23,7 +22,7 @@ class APIKeyManager:
         """
         with self.lock:
             if not self._keys:
-                raise RuntimeError("No Gemini API keys configured. Set GEMINI_KEY_1 through GEMINI_KEY_5 or GEMINI_API_KEY.")
+                raise RuntimeError("No Gemini API keys configured. Set GEMINI_KEY_1 through GEMINI_KEY_N or GEMINI_API_KEY.")
             active_key = self._keys[self._current_index]
             return genai.Client(api_key=active_key)
 

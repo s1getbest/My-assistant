@@ -143,6 +143,7 @@ def apply_gemini_tags(tags):
             elif tag_type == "NOTE" and "|" in payload:
                 category, note_text = payload.split("|", 1)
                 note_filename = f"{sanitize_note_category(category)}.md"
+                # Note files are automatically routed to 02-Brain folder by drive_service
                 append_line_to_drive(note_filename, f"* {note_text.strip()}")
             elif tag_type == "CARD" and "|" in payload:
                 question, answer = payload.split("|", 1)

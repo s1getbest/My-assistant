@@ -8,17 +8,20 @@ FOLDER_ID = os.getenv("FOLDER_ID")
 GOOGLE_TOKEN_JSON = os.getenv("GOOGLE_TOKEN_JSON")
 
 # === GEMINI API KEYS ===
-GEMINI_KEY_1 = os.getenv("GEMINI_KEY_1")
-GEMINI_KEY_2 = os.getenv("GEMINI_KEY_2")
-GEMINI_KEY_3 = os.getenv("GEMINI_KEY_3")
-GEMINI_KEY_4 = os.getenv("GEMINI_KEY_4")
-GEMINI_KEY_5 = os.getenv("GEMINI_KEY_5")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # General fallback
+# Dynamic key pool: scan environment for all GEMINI_KEY_* variables
+GEMINI_KEYS = []
+for key, value in os.environ.items():
+    if key.startswith("GEMINI_KEY_") and value:
+        GEMINI_KEYS.append((key, value))
+# Sort keys by suffix number to maintain consistent order
+GEMINI_KEYS.sort(key=lambda kv: int(kv[0].split('_')[-1]) if kv[0].split('_')[-1].isdigit() else 999)
+GEMINI_KEYS = [value for key, value in GEMINI_KEYS]
 
-# === KEY ROTATION POOL ===
-GEMINI_KEYS = [key for key in [GEMINI_KEY_1, GEMINI_KEY_2, GEMINI_KEY_3, GEMINI_KEY_4, GEMINI_KEY_5] if key]
-if not GEMINI_KEYS and GEMINI_API_KEY:
-    GEMINI_KEYS.append(GEMINI_API_KEY)
+# Fallback to general GEMINI_API_KEY if no numbered keys found
+if not GEMINI_KEYS:
+    fallback_key = os.getenv("GEMINI_API_KEY")
+    if fallback_key:
+        GEMINI_KEYS.append(fallback_key)
 
 # === MODEL ROUTING CONSTANTS ===
 MODEL_COMPLEX = "gemini-3.5-flash"

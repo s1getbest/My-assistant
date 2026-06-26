@@ -435,24 +435,30 @@
 
         async function reviewFlashcard(intervalHours) {
             if (!currentFlashcard) return;
-            try {
-                const res = await fetch('/api/flashcards/review', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': getTelegramInitData()
-                    },
-                    body: JSON.stringify({
-                        id: currentFlashcard.id,
-                        interval_hours: intervalHours
-                    })
-                });
-                const data = await res.json();
-                if (!data.success) throw new Error(data.error || 'Failed');
-                await loadFlashcard();
-            } catch (e) {
-                showToast('Ошибка повторения: ' + e.message);
-            }
+            
+            // Optimistic UI: immediately hide current card
+            const cardWrap = document.getElementById('study-card');
+            const emptyState = document.getElementById('study-empty');
+            cardWrap.classList.add('hidden');
+            emptyState.classList.add('hidden');
+            
+            // Fire and forget the review request
+            fetch('/api/flashcards/review', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': getTelegramInitData()
+                },
+                body: JSON.stringify({
+                    id: currentFlashcard.id,
+                    interval_hours: intervalHours
+                })
+            }).catch(e => {
+                showToast('Ошибка сохранения: ' + e.message);
+            });
+            
+            // Immediately load next card
+            await loadFlashcard();
         }
 
         function initChart() {

@@ -31,6 +31,72 @@ def get_drive_service():
         raise RuntimeError("Google Drive credentials not initialized.")
     return build('drive', 'v3', credentials=_drive_creds)
 
+# === OBSIDIAN FOLDER MAPPING ===
+_FOLDER_IDS = {
+    "01-Daily": None,
+    "02-Brain": None,
+    "03-System": None
+}
+_FOLDER_LOCK = threading.Lock()
+
+
+def _get_or_create_folder(folder_name):
+    """
+    Get folder ID by name within the main FOLDER_ID.
+    If it doesn't exist, create it.
+    """
+    try:
+        service = get_drive_service()
+        query = f"name = '{folder_name}' and '{config.FOLDER_ID}' in parents and trashed = false and mimeType = 'application/vnd.google-apps.folder'"
+        results = service.files().list(q=query, spaces='drive', fields='files(id)').execute()
+        files = results.get('files', [])
+        
+        if files:
+            folder_id = files[0]['id']
+            print(f"[Drive] Found existing folder: {folder_name} (ID: {folder_id})")
+            return folder_id
+        
+        # Create folder if it doesn't exist
+        folder_metadata = {
+            'name': folder_name,
+            'parents': [config.FOLDER_ID],
+            'mimeType': 'application/vnd.google-apps.folder'
+        }
+        folder = service.files().create(body=folder_metadata, fields='id').execute()
+        folder_id = folder.get('id')
+        print(f"[Drive] Created new folder: {folder_name} (ID: {folder_id})")
+        return folder_id
+    except Exception as e:
+        print(f"[Drive] Error getting/creating folder {folder_name}: {e}")
+        return None
+
+
+def initialize_folder_mapping():
+    """
+    Initialize folder IDs for Obsidian structure on startup.
+    """
+    with _FOLDER_LOCK:
+        for folder_name in _FOLDER_IDS.keys():
+            _FOLDER_IDS[folder_name] = _get_or_create_folder(folder_name)
+    print(f"[Drive] Folder mapping initialized: {_FOLDER_IDS}")
+
+
+def _get_folder_for_file(filename):
+    """
+    Determine which folder a file should be stored in based on its name.
+    """
+    # Daily files
+    if filename in ["Tasks.md", "Health.md", "Finance.md"]:
+        return _FOLDER_IDS.get("01-Daily")
+    # Brain files (Zettelkasten notes)
+    if filename.endswith(".md") and filename not in ["Tasks.md", "Health.md", "Finance.md", "Goals.md", "Inbox.md", "Icebox.md", "Memory.md"]:
+        return _FOLDER_IDS.get("02-Brain")
+    # System files
+    if filename in ["Inbox.md", "Flashcards.json", "Profile.json", "Goals.md", "Icebox.md", "Memory.md"]:
+        return _FOLDER_IDS.get("03-System")
+    # Default to main folder
+    return config.FOLDER_ID
+
 
 # === GOOGLE DRIVE CACHING ===
 _FILE_CACHE = {}
@@ -38,12 +104,12 @@ _CACHE_TIME = {}
 _CACHE_LOCK = threading.Lock()
 
 
-def get_file_id_by_name(filename):
+def get_file_id_by_name(filename, folder_id=None):
     try:
+        if folder_id is None:
+            folder_id = _get_folder_for_file(filename)
         service = get_drive_service()
-        query = f"name = '{filename}' and '{config.FOLDER_ID}' in parents and trashed = false"
-        results = service.files().list(q=query, spaces='drive', fields='files(id)').execute()
-        files = results.get('files', [])
+        query = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
         return files[0]['id'] if files else None
     except Exception as e:
         print(f"[Drive] Error looking up file ID for {filename}: {e}")
@@ -92,7 +158,8 @@ def write_file_to_drive(filename, content):
     for attempt in range(3):
         try:
             service = get_drive_service()
-            file_id = get_file_id_by_name(filename)
+            folder_id = _get_folder_for_file(filename)
+            file_id = get_file_id_by_name(filename, folder_id)
             media = MediaIoBaseUpload(
                 io.BytesIO(content.encode('utf-8')), 
                 mimetype='text/markdown', 
@@ -101,7 +168,7 @@ def write_file_to_drive(filename, content):
             if file_id:
                 service.files().update(fileId=file_id, media_body=media).execute()
             else:
-                file_metadata = {'name': filename, 'parents': [config.FOLDER_ID]}
+                file_metadata = {'name': filename, 'parents': [folder_id]}
                 service.files().create(body=file_metadata, media_body=media, fields='id').execute()
             
             # Forcefully update cache upon successful write
@@ -116,7 +183,6 @@ def write_file_to_drive(filename, content):
                 time.sleep(1)
     print(f"[Drive] Write failed for {filename}: {last_err}")
     raise last_err
-
 
 def read_json_from_drive(filename):
     try:

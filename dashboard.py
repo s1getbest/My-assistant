@@ -33,6 +33,7 @@ def validate_telegram_data(init_data):
         vals = {
             k: urllib.parse.unquote(v)
             for k, v in [s.split('=', 1) for s in init_data.split('&')]
+        }
         if 'hash' not in vals:
             return False
         data_check_string = '\n'.join(

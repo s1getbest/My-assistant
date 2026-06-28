@@ -9,15 +9,17 @@ GOOGLE_TOKEN_JSON = os.getenv("GOOGLE_TOKEN_JSON")
 
 # === GEMINI API KEYS ===
 # Dynamic key pool: scan environment for all GEMINI_KEY_* variables
-# Validate keys: must start with "AIzaSy" and not be empty/None
+# Validate keys: must start with "AIzaSy" OR "AQ." (new Google AI Studio format) and not be empty/None
 GEMINI_KEYS = []
 for key, value in os.environ.items():
     if key.startswith("GEMINI_KEY_") and value and value.strip():
-        # Validate key format (Gemini keys start with "AIzaSy")
-        if value.strip().startswith("AIzaSy"):
-            GEMINI_KEYS.append((key, value.strip()))
+        # Clean key: strip quotes and whitespace
+        cleaned_key = value.strip().strip("'\" ")
+        # Validate key format (Gemini keys start with "AIzaSy" or "AQ.")
+        if cleaned_key.startswith("AIzaSy") or cleaned_key.startswith("AQ."):
+            GEMINI_KEYS.append((key, cleaned_key))
         else:
-            print(f"[Config] Skipping invalid key format for {key}: does not start with AIzaSy")
+            print(f"[Config] Skipping invalid key format for {key}: does not start with AIzaSy or AQ.")
 # Sort keys by suffix number to maintain consistent order
 GEMINI_KEYS.sort(key=lambda kv: int(kv[0].split('_')[-1]) if kv[0].split('_')[-1].isdigit() else 999)
 GEMINI_KEYS = [value for key, value in GEMINI_KEYS]
@@ -25,11 +27,15 @@ GEMINI_KEYS = [value for key, value in GEMINI_KEYS]
 # Fallback to general GEMINI_API_KEY if no numbered keys found
 if not GEMINI_KEYS:
     fallback_key = os.getenv("GEMINI_API_KEY")
-    if fallback_key and fallback_key.strip() and fallback_key.strip().startswith("AIzaSy"):
-        GEMINI_KEYS.append(fallback_key.strip())
-        print("[Config] Using fallback GEMINI_API_KEY")
+    if fallback_key and fallback_key.strip():
+        cleaned_key = fallback_key.strip().strip("'\" ")
+        if cleaned_key.startswith("AIzaSy") or cleaned_key.startswith("AQ."):
+            GEMINI_KEYS.append(cleaned_key)
+            print("[Config] Using fallback GEMINI_API_KEY")
+        else:
+            print("[Config] Warning: Fallback GEMINI_API_KEY has invalid format")
     else:
-        print("[Config] Warning: No valid Gemini API keys found. Please set GEMINI_KEY_1 through GEMINI_KEY_N or GEMINI_API_KEY with valid keys starting with 'AIzaSy'")
+        print("[Config] Warning: No valid Gemini API keys found. Please set GEMINI_KEY_1 through GEMINI_KEY_N or GEMINI_API_KEY with valid keys starting with 'AIzaSy' or 'AQ.'")
 
 # === MODEL ROUTING CONSTANTS ===
 MODEL_COMPLEX = "gemini-3.5-flash"

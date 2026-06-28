@@ -110,22 +110,26 @@ def get_file_id_by_name(filename, folder_id=None):
             folder_id = _get_folder_for_file(filename)
         service = get_drive_service()
         query = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
+        results = service.files().list(q=query, spaces='drive', fields='files(id)').execute()
+        files = results.get('files', [])
         return files[0]['id'] if files else None
     except Exception as e:
         print(f"[Drive] Error looking up file ID for {filename}: {e}")
         return None
 
 
-def read_file_from_drive(filename):
-    # Check cache first
-    with _CACHE_LOCK:
-        if filename in _FILE_CACHE and (time.time() - _CACHE_TIME.get(filename, 0) < 300):
-            return _FILE_CACHE[filename]
+def read_file_from_drive(filename, bypass_cache=False):
+    # Check cache first (unless bypassed)
+    if not bypass_cache:
+        with _CACHE_LOCK:
+            if filename in _FILE_CACHE and (time.time() - _CACHE_TIME.get(filename, 0) < 300):
+                return _FILE_CACHE[filename]
 
     last_err = None
     for attempt in range(3):
         try:
-            file_id = get_file_id_by_name(filename)
+            target_folder_id = _get_folder_for_file(filename)
+            file_id = get_file_id_by_name(filename, folder_id=target_folder_id)
             if not file_id:
                 return ""
             service = get_drive_service()

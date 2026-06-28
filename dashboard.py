@@ -20,10 +20,18 @@ from drive_service import (
     get_habit_completion_array,
     get_user_profile,
     add_user_xp,
+    initialize_folder_mapping,
 )
 
 # Initialize Flask Mini App
 app = Flask(__name__)
+
+# Initialize folder mapping on startup
+try:
+    initialize_folder_mapping()
+    print("[Dashboard] Folder mapping initialized.")
+except Exception as e:
+    print(f"[Dashboard] Warning: Failed to initialize folder mapping: {e}")
 
 
 def validate_telegram_data(init_data):

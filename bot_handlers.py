@@ -914,6 +914,8 @@ def chat_with_gemini(message):
                     agent_tutor_background(note_body)
                 
                 reply_part = f"📝 Заметка сохранена: {note_output.replace('[NOTE]', '').strip()}"
+                if not reply_part or not reply_part.strip():
+                    reply_part = "Успешно записал новые знания в твой мозг! 🧠"
                 bot.reply_to(message, reply_part)
                 return
 
@@ -977,6 +979,9 @@ You have access to the user's tasks (Tasks.md). If the user asks about their sch
                 note_body = payload.split("|", 1)[1].strip()
                 agent_tutor_background(note_body)
 
+        # Prevent empty reply to avoid Telegram 400 errors
+        if not reply_part or not reply_part.strip():
+            reply_part = "Успешно записал новые знания в твой мозг! 🧠"
         bot.reply_to(message, reply_part)
     except Exception as e:
         bot.reply_to(message, f"Ошибка: {e}")

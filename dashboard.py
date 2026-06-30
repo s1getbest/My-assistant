@@ -14,9 +14,7 @@ from drive_service import (
     write_file_to_drive,
     write_json_to_drive,
     get_today_tasks,
-    get_monthly_expenses,
     get_sleep_chart_data,
-    get_expenses_by_category,
     get_habit_completion_array,
     get_user_profile,
     add_user_xp,
@@ -144,15 +142,13 @@ def home():
 
     # Safe Google Drive Reads & Fallbacks
     today_tasks = []
-    total_spent = 0
-    recent_expenses = []
     sleep_data = [0]
     sleep_labels = ["No data"]
     last_sleep = "—"
-    expense_categories = {}
     habit_data = []
     profile = {"xp": 0, "level": 1}
     welcome_msg = "Привет, Павел! Рад тебя видеть в Time OS 2.0."
+    flashcard_stats = {"total": 0, "due": 0}
 
     # Fetch with individual try-except blocks
     try:
@@ -162,22 +158,10 @@ def home():
         today_tasks = []
 
     try:
-        total_spent, recent_expenses = get_monthly_expenses()
-    except Exception as e:
-        print(f"[Dashboard] Error getting monthly expenses: {e}")
-        total_spent, recent_expenses = 0, []
-
-    try:
         sleep_data, sleep_labels, last_sleep = get_sleep_chart_data()
     except Exception as e:
         print(f"[Dashboard] Error getting sleep data: {e}")
         sleep_data, sleep_labels, last_sleep = [0], ["No data"], "—"
-
-    try:
-        expense_categories = get_expenses_by_category()
-    except Exception as e:
-        print(f"[Dashboard] Error getting expense categories: {e}")
-        expense_categories = {}
 
     try:
         habit_data = get_habit_completion_array()
@@ -206,6 +190,22 @@ def home():
         profile = {"xp": 0, "level": 1}
 
     try:
+        flashcards = read_json_from_drive("Flashcards.json")
+        if isinstance(flashcards, list):
+            flashcard_stats["total"] = len(flashcards)
+            now = datetime.now(config.msk_tz)
+            for card in flashcards:
+                try:
+                    review_dt = datetime.strptime(card.get("next_review", ""), "%Y-%m-%d %H:%M:%S")
+                    review_dt = config.msk_tz.localize(review_dt)
+                    if review_dt <= now:
+                        flashcard_stats["due"] += 1
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"[Dashboard] Error getting flashcard stats: {e}")
+
+    try:
         from key_manager import key_manager
         current_memory = read_file_from_drive("Memory.md")
         if current_memory:
@@ -222,15 +222,13 @@ def home():
         "dashboard.html",
         today_label=today_label,
         today_tasks=today_tasks,
-        total_spent=total_spent,
-        recent_expenses=recent_expenses,
         sleep_data=sleep_data,
         sleep_labels=sleep_labels,
         last_sleep=last_sleep,
-        expense_categories=expense_categories,
         habit_data=habit_data,
         welcome_msg=welcome_msg,
         profile=profile,
+        flashcard_stats=flashcard_stats,
     )
 
 

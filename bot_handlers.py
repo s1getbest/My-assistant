@@ -1,5 +1,5 @@
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 import telebot
 from google.genai import types
 from uuid import uuid4
@@ -22,7 +22,7 @@ from drive_service import (
 
 # === REGEX CONSTANTS ===
 TAG_LINE_RE = re.compile(
-    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|FINANCE|HEALTH|MEMORY|SCHEDULE|QUESTION|MOOD|INBOX|NOTE|CARD)\]\s*(.+)$',
+    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|MEMORY|SCHEDULE|QUESTION|MOOD|INBOX|NOTE|CARD)\]\s*(.+)$',
     re.MULTILINE
 )
 TASK_TIME_RE = re.compile(r'(\d{2}:\d{2})\s*\|\s*(.+)$')
@@ -69,7 +69,6 @@ def get_extraction_rules(today_str):
 [TASK_ADD] ГГГГ-ММ-ДД ЧЧ:ММ | Описание задачи или рутины
 [TASK_DEL] text_to_find
 [TASK_EDIT] text_to_find || ГГГГ-ММ-ДД ЧЧ:ММ | Новое описание задачи
-[FINANCE] ГГГГ-ММ-ДД: сумма | категория | описание
 [HEALTH] ГГГГ-ММ-ДД: часы
 [MEMORY] факт для долгосрочной памяти
 [SCHEDULE] ГГГГ-ММ-ДД ЧЧ:ММ | Текст напоминания
@@ -80,14 +79,16 @@ def get_extraction_rules(today_str):
 
 Если пользователь просит удалить задачу, используй [TASK_DEL] и передай уникальный фрагмент текста для поиска.
 Если пользователь просит изменить задачу, используй [TASK_EDIT] в формате `старый_текст || новая_строка`.
-Если пользователь просит напомнить заранее, например "за 1 час" или "за 1 день" до события, вычисли точную дату и время напоминания и выдай [SCHEDULE] с уже рассчитанным временем.
+Если пользователь просит напомнить заранее, например "час" или "за 1 день" до события, вычисли точную дату и время напоминания и выдай [SCHEDULE] с уже рассчитанным временем.
 Если пользователь просто выгружает мысли, идеи, наблюдения или факты без явного действия, используй [INBOX].
 Если это атомарная заметка для Второго Мозга, используй [NOTE] и автоматически оборачивай ключевые сущности, концепты и имена в [[wikilinks]], а также добавляй релевантные #tags.
 Если можно сформулировать учебную карточку вопрос-ответ, используй [CARD].
 
+ВАЖНО: При сохранении Zettelkasten заметки, выводи [NOTE] Category | Rich text с [[wikilinks]] и #tags.
+Затем выводи ответ пользователю в [ОТВЕТ]. Текст в [ОТВЕТ] ДОЛЖЕН БЫТЬ ЧИСТЫМ. НЕ ставь НИКАКИХ [[wikilinks]], #tags или **bold** в секции [ОТВЕТ]. Просто напиши что-то естественное вроде "Я записал этот факт в базу знаний".
+
 Примеры распознавания:
 - "поспал 8 часов" → [HEALTH] {today_str}: 8
-- "потратил 450р на обед" → [FINANCE] {today_str}: 450 | еда | обед
 - "напомни в 21:00 позвонить маме" → [SCHEDULE] {today_str} 21:00 | Позвонить маме
 - "завтра в 9 утра тренировка" → [TASK_ADD] <дата> 09:00 | Тренировка
 - "удали задачу созвон с Димой" → [TASK_DEL] созвон с Димой
@@ -321,29 +322,6 @@ def send_welcome(message):
     bot.reply_to(message, "Привет! Твой личный мозг запущен. Я подключен к Google Диску и Obsidian!")
 
 
-@bot.message_handler(commands=['spent'])
-def track_expense(message):
-    if not is_me(message):
-        return
-    bot.send_chat_action(message.chat.id, 'typing')
-    try:
-        args = message.text.split()
-        if len(args) < 2:
-            bot.reply_to(message, "Укажи сумму и описание. Пример: `/spent 500 еда обед`")
-            return
-        amount = args[1]
-        category = args[2] if len(args) > 2 else "Разное"
-        desc = " ".join(args[3:]) if len(args) > 3 else category
-        today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
-        line = f"* {today_str}: {amount} | {category} | {desc}"
-        append_line_to_drive("Finance.md", line)
-        from drive_service import add_user_xp
-        add_user_xp(5)
-        bot.reply_to(message, f"💸 **Расход записан!** (+5 XP)\n\n> {amount} ₽ · {category}\n> {desc}")
-    except Exception as e:
-        bot.reply_to(message, f"Ошибка записи расхода: {e}")
-
-
 @bot.message_handler(commands=['sleep'])
 def track_sleep(message):
     if not is_me(message):
@@ -362,6 +340,40 @@ def track_sleep(message):
         bot.reply_to(message, f"🛌 **Сон записан!** (+5 XP)\n\n> {today_str} · {hours} ч.")
     except Exception as e:
         bot.reply_to(message, f"Ошибка записи сна: {e}")
+
+
+@bot.message_handler(commands=['quiz'])
+def quiz_flashcards(message):
+    if not is_me(message):
+        return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        flashcards = read_json_from_drive("Flashcards.json")
+        if not isinstance(flashcards, list):
+            flashcards = []
+        
+        now = datetime.now(config.msk_tz)
+        due_cards = []
+        for card in flashcards:
+            try:
+                review_dt = datetime.strptime(card.get("next_review", ""), "%Y-%m-%d %H:%M:%S")
+                review_dt = config.msk_tz.localize(review_dt)
+                if review_dt <= now:
+                    due_cards.append((review_dt, card))
+            except Exception:
+                continue
+        
+        due_cards.sort(key=lambda item: item[0])
+        if not due_cards:
+            bot.reply_to(message, "🎉 Нет карточек для повторения!")
+            return
+        
+        card = due_cards[0][1]
+        keyboard = telebot.types.InlineKeyboardMarkup()
+        keyboard.add(telebot.types.InlineKeyboardButton("Показать ответ", callback_data=f"show_answer:{card['id']}"))
+        bot.reply_to(message, f"🎓 **Вопрос:**\n\n{card['q']}", reply_markup=keyboard, parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка загрузки карточки: {e}")
 
 
 @bot.message_handler(content_types=['voice'])
@@ -602,6 +614,93 @@ def handle_task_callback(call):
     except Exception as e:
         print(f"[Callback Error] Error handling task callback: {e}")
         bot.answer_callback_query(call.id, "Произошла ошибка при обработке.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('show_answer:'))
+def handle_show_answer(call):
+    if call.from_user.id != config.MY_TELEGRAM_ID:
+        bot.answer_callback_query(call.id, "Ошибка: Доступ запрещен.", show_alert=True)
+        return
+    try:
+        card_id = call.data.split(':', 1)[1]
+        flashcards = read_json_from_drive("Flashcards.json")
+        if not isinstance(flashcards, list):
+            flashcards = []
+        
+        card = None
+        for c in flashcards:
+            if c.get("id") == card_id:
+                card = c
+                break
+        
+        if not card:
+            bot.answer_callback_query(call.id, "Карточка не найдена.", show_alert=True)
+            return
+        
+        keyboard = telebot.types.InlineKeyboardMarkup()
+        keyboard.row(
+            telebot.types.InlineKeyboardButton("Снова 1м", callback_data=f"srs:{card_id}:0.016"),
+            telebot.types.InlineKeyboardButton("Позже 6ч", callback_data=f"srs:{card_id}:6")
+        )
+        keyboard.row(
+            telebot.types.InlineKeyboardButton("Завтра 1д", callback_data=f"srs:{card_id}:24"),
+            telebot.types.InlineKeyboardButton("Неделя 7д", callback_data=f"srs:{card_id}:168")
+        )
+        keyboard.add(telebot.types.InlineKeyboardButton("Месяц 30д", callback_data=f"srs:{card_id}:720"))
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=f"🎓 **Вопрос:**\n\n{card['q']}\n\n💡 **Ответ:**\n\n{card['a']}",
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        print(f"[Quiz Callback] Error showing answer: {e}")
+        bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('srs:'))
+def handle_srs_review(call):
+    if call.from_user.id != config.MY_TELEGRAM_ID:
+        bot.answer_callback_query(call.id, "Ошибка: Доступ запрещен.", show_alert=True)
+        return
+    try:
+        _, card_id, interval_hours = call.data.split(':', 2)
+        interval_hours = float(interval_hours)
+        
+        flashcards = read_json_from_drive("Flashcards.json")
+        if not isinstance(flashcards, list):
+            flashcards = []
+        
+        updated = False
+        next_review = datetime.now(config.msk_tz) + timedelta(hours=interval_hours)
+        for card in flashcards:
+            if card.get("id") == card_id:
+                card["next_review"] = next_review.strftime("%Y-%m-%d %H:%M:%S")
+                updated = True
+                break
+        
+        if not updated:
+            bot.answer_callback_query(call.id, "Карточка не найдена.", show_alert=True)
+            return
+        
+        write_json_to_drive("Flashcards.json", flashcards)
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="✅ Запомнил!",
+            reply_markup=None
+        )
+        bot.answer_callback_query(call.id)
+        
+        # Automatically send next due card
+        quiz_flashcards(call.message)
+    except Exception as e:
+        print(f"[Quiz Callback] Error handling SRS: {e}")
+        bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
 
 
 @bot.message_handler(commands=['journal'])

@@ -123,41 +123,7 @@
             </div>
         </div>
 
-        <!-- TAB 2: FINANCE -->
-        <div id="tab-finance" class="tab-panel hidden">
-            <div class="bg-gradient-to-br from-emerald-950/40 to-slate-900 rounded-2xl border border-emerald-500/20 p-5 mb-4">
-                <p class="text-[10px] font-bold text-emerald-400/80 uppercase tracking-wider">Расходы за месяц</p>
-                <p class="text-4xl font-extrabold text-emerald-400 mt-1">{{ total_spent }} <span class="text-lg">₽</span></p>
-            </div>
-            
-            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">📊 Аналитика по категориям</h2>
-                <div class="h-48 flex justify-center">
-                    <canvas id="financeChart"></canvas>
-                </div>
-            </div>
-
-            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3"> Последние траты</h2>
-                {% if recent_expenses %}
-                <ul class="space-y-2">
-                    {% for exp in recent_expenses %}
-                    <li class="flex items-center justify-between bg-slate-950/50 rounded-xl p-3 border border-slate-800/60">
-                        <div class="min-w-0">
-                            <p class="text-sm truncate">{{ exp.description }}</p>
-                            <p class="text-[10px] text-slate-500">{{ exp.category }} · {{ exp.date }}</p>
-                        </div>
-                        <span class="text-sm font-bold text-emerald-400 shrink-0 ml-2">−{{ exp.amount }} ₽</span>
-                    </li>
-                    {% endfor %}
-                </ul>
-                {% else %}
-                <p class="text-sm text-slate-500 text-center py-6">Нет записей</p>
-                {% endif %}
-            </div>
-        </div>
-
-        <!-- TAB 3: HEALTH -->
+        <!-- TAB 2: HEALTH -->
         <div id="tab-health" class="tab-panel hidden">
             <div class="grid grid-cols-2 gap-3 mb-4">
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
@@ -177,32 +143,24 @@
             </div>
         </div>
 
-        <!-- TAB 4: STUDY -->
+        <!-- TAB 3: STUDY -->
         <div id="tab-study" class="tab-panel hidden">
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
                 <div class="flex items-center gap-2 mb-3">
                     <span class="text-lg">🎓</span>
-                    <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Study</h2>
+                    <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Study Analytics</h2>
                 </div>
-                <div id="study-empty" class="text-sm text-slate-500 text-center py-8 hidden">All caught up! 🎉</div>
-                <div id="study-card" class="hidden">
-                    <p class="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-2">Вопрос</p>
-                    <p id="study-question" class="text-base font-semibold leading-relaxed text-slate-100"></p>
-                    <div id="study-answer-wrap" class="hidden mt-4 border-t border-slate-800 pt-4">
-                        <p class="text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-2">Ответ</p>
-                        <p id="study-answer" class="text-sm leading-relaxed text-emerald-100"></p>
+                <div class="grid grid-cols-2 gap-3">
+                    <div class="bg-slate-950/50 rounded-xl p-4 border border-slate-800">
+                        <p class="text-[10px] font-bold text-slate-500 uppercase">Всего карточек</p>
+                        <p class="text-3xl font-extrabold text-indigo-400 mt-1">{{ flashcard_stats.total }}</p>
                     </div>
-                    <button id="show-answer-btn" onclick="showFlashcardAnswer()" class="mt-4 w-full bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold py-2.5 rounded-xl transition-colors">
-                        Show Answer
-                    </button>
-                    <div id="study-actions" class="hidden mt-4 grid grid-cols-2 gap-2">
-                        <button onclick="reviewFlashcard(0.016)" class="bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold py-2 rounded-lg">Снова (1 мин)</button>
-                        <button onclick="reviewFlashcard(6)" class="bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold py-2 rounded-lg">Позже (6 ч)</button>
-                        <button onclick="reviewFlashcard(24)" class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold py-2 rounded-lg">Завтра (1 дн)</button>
-                        <button onclick="reviewFlashcard(168)" class="bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold py-2 rounded-lg">Неделя (7 дн)</button>
-                        <button onclick="reviewFlashcard(720)" class="col-span-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold py-2 rounded-lg">Месяц (30 дн)</button>
+                    <div class="bg-slate-950/50 rounded-xl p-4 border border-slate-800">
+                        <p class="text-[10px] font-bold text-slate-500 uppercase">Ожидают повторения</p>
+                        <p class="text-3xl font-extrabold text-amber-400 mt-1">{{ flashcard_stats.due }}</p>
                     </div>
                 </div>
+                <p class="text-xs text-slate-500 text-center mt-4">Используй /quiz в Telegram для повторения карточек</p>
             </div>
         </div>
 
@@ -219,11 +177,6 @@
             <button onclick="switchTab('tasks')" id="nav-tasks" class="nav-btn flex flex-col items-center gap-0.5 px-4 py-1 text-slate-500 transition-colors">
                 <span class="text-xl">📋</span>
                 <span class="text-[9px] font-semibold uppercase tracking-wide">Tasks</span>
-                <span class="nav-dot w-1 h-1 rounded-full bg-indigo-400"></span>
-            </button>
-            <button onclick="switchTab('finance')" id="nav-finance" class="nav-btn flex flex-col items-center gap-0.5 px-4 py-1 text-slate-500 transition-colors">
-                <span class="text-xl">💸</span>
-                <span class="text-[9px] font-semibold uppercase tracking-wide">Finance</span>
                 <span class="nav-dot w-1 h-1 rounded-full bg-indigo-400"></span>
             </button>
             <button onclick="switchTab('health')" id="nav-health" class="nav-btn flex flex-col items-center gap-0.5 px-4 py-1 text-slate-500 transition-colors">
@@ -246,10 +199,8 @@
             document.body.style.backgroundColor = '#020617';
         }
 
-        const TABS = ['overview', 'tasks', 'finance', 'health', 'study'];
+        const TABS = ['overview', 'tasks', 'health', 'study'];
         let chartInstance = null;
-        let financeChartInstance = null;
-        let currentFlashcard = null;
 
         function getTelegramInitData() {
             return window.Telegram?.WebApp?.initData || '';
@@ -261,49 +212,6 @@
                 document.getElementById('nav-' + t).classList.toggle('nav-active', t === name);
             });
             if (name === 'health' && !chartInstance) initChart();
-            if (name === 'finance' && !financeChartInstance) initFinanceChart();
-            if (name === 'study') loadFlashcard();
-        }
-
-        function initFinanceChart() {
-            const categoriesData = {{ expense_categories|tojson }};
-            const labels = Object.keys(categoriesData);
-            const values = Object.values(categoriesData);
-            
-            if (labels.length === 0) {
-                labels.push("Нет расходов");
-                values.push(1);
-            }
-            
-            const ctx = document.getElementById('financeChart').getContext('2d');
-            financeChartInstance = new Chart(ctx, {
-                type: 'doughnut',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        data: values,
-                        backgroundColor: [
-                            '#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', 
-                            '#ec4899', '#14b8a6', '#f97316', '#06b6d4', '#6366f1'
-                        ],
-                        borderWidth: 1,
-                        borderColor: '#0f172a'
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            position: 'right',
-                            labels: {
-                                color: '#94a3b8',
-                                font: { size: 10 }
-                            }
-                        }
-                    }
-                }
-            });
         }
 
         async function completeTask(checkbox) {

@@ -230,8 +230,18 @@ def agent_router(user_message):
     """
     Agent Router: Uses MODEL_LITE to classify user intent.
     Returns EXACTLY ONE word: TASK, FINANCE, HEALTH, QUESTION, or NOTE.
+    If the message contains a URL (especially YouTube, educational articles, PDFs), classify as NOTE.
     """
     try:
+        # Check for URLs first
+        import re
+        url_pattern = re.compile(r'https?://\S+|www\.\S+')
+        has_url = bool(url_pattern.search(user_message))
+        
+        if has_url:
+            print(f"[Agent Router] URL detected, classifying as NOTE")
+            return "NOTE"
+        
         prompt = apply_format_rule(f"""Analyze the user's message. Output EXACTLY ONE word: TASK, FINANCE, HEALTH, QUESTION, or NOTE.
 
 User message: "{user_message}"
@@ -254,10 +264,15 @@ User message: "{user_message}"
 def agent_archivist(user_message):
     """
     Agent Archivist: Uses MODEL_COMPLEX to format user's thought into Zettelkasten note.
-    Output: [NOTE] Category | Formatted Text with [[wikilinks]] and #tags.
+    For URLs/educational content, performs deep analysis with wikilinks and tags.
+    Output: [NOTE] Category | # Title\n\n**Summary:** ...\n\n**Key Concepts:** ...
     """
     try:
-        prompt = apply_format_rule(f"""Format the user's thought into a Zettelkasten note. Add Obsidian [[wikilinks]] for key entities, and generate appropriate #tags. Output: [NOTE] Category | Formatted Text.
+        prompt = apply_format_rule(f"""You are an expert academic researcher and Zettelkasten archivist. Analyze the provided link/text (e.g., YouTube lecture or article). Create a comprehensive summary. You MUST format key entities, theories, and concepts using Obsidian wikilinks [[Concept]] and add #tags. Output strictly: [NOTE] Category | # Title
+
+**Summary:** ...
+
+**Key Concepts:** ...
 
 User thought: "{user_message}"
 """)
@@ -273,13 +288,17 @@ User thought: "{user_message}"
 
 def agent_tutor_background(note_text):
     """
-    Agent Tutor (Background): Uses MODEL_COMPLEX to generate Anki flashcard from note.
+    Agent Tutor (Background): Uses MODEL_COMPLEX to generate contextual Active Recall flashcard from note.
     Runs in background thread to avoid blocking Telegram reply.
-    Output: [CARD] Question | Answer
+    Uses Bloom's Taxonomy for level-appropriate questions.
+    Output: [CARD] Question | Answer with [[wikilinks]]
     """
     def generate_flashcard():
         try:
-            prompt = apply_format_rule(f"""Create a Q&A flashcard based on this note. Output: [CARD] Question | Answer.
+            prompt = apply_format_rule(f"""You are an expert neuro-education tutor using Bloom's Taxonomy and Spaced Repetition. Analyze the saved Zettelkasten note:
+  - If it's an atomic fact (Level 1: word, definition, date), generate a direct Q&A card.
+  - If it's a complex concept, historical event, or university lecture (Level 2 & 3), generate a CONTEXTUAL Active Recall card. Ask 'Why' or 'How does X relate to Y?'. Include the explanatory narrative and Obsidian wikilinks in the answer so the user recalls the whole system.
+  Output strictly: [CARD] Question | Answer with [[wikilinks]].
 
 Note: "{note_text}"
 """)

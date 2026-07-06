@@ -11,7 +11,9 @@ from drive_service import (
     read_json_from_drive,
     read_file_from_drive,
     read_or_create_goals,
+    append_line_to_drive,
 )
+from bot_handlers import parse_gemini_tags, apply_gemini_tags
 
 # Initialize BackgroundScheduler with Moscow Timezone
 scheduler = BackgroundScheduler(timezone=config.msk_tz)
@@ -262,14 +264,17 @@ def morning_briefing():
     """
     Scheduled job at 06:00 AM providing Morning AI Briefing using MODEL_COMPLEX.
     Reads today's tasks, memory, and goals, and generates an inspiring briefing.
+    Auto-adds goal-driven micro-tasks to Tasks.md via parse_gemini_tags.
     """
     try:
         print("[Scheduler] Starting morning briefing job...")
         today_tasks = get_today_tasks()
         current_memory = read_file_from_drive("Memory.md")
         goals_content = read_or_create_goals()
+        tasks_content = read_file_from_drive("Tasks.md")
         flashcards = read_json_from_drive("Flashcards.json")
         now = datetime.now(config.msk_tz)
+        today_str = now.strftime("%Y-%m-%d")
         
         # Format today's tasks
         tasks_text = ""
@@ -301,34 +306,45 @@ def morning_briefing():
                 for card in review_cards
             )
 
-        prompt = apply_format_rule(f"""Ты личный строгий и заботливый ассистент Павел. Твоя задача — составить мотивирующий и структурированный утренний брифинг для Павла.
-Сегодняшняя дата: {now.strftime('%Y-%m-%d')}
+        prompt = apply_format_rule(f"""You are an elite productivity coach. Review the user's long-term goals in Goals.md and their schedule in Tasks.md.
+  1. Write an inspiring, concise morning briefing (NO double asterisks `**`, NO TTS audio).
+  2. Formulate EXACTLY ONE actionable micro-task for today that advances the user toward one of their long-term goals.
+  3. At the very end of your output, emit the tag: [TASK_ADD] YYYY-MM-DD 10:00 | 🎯 GOAL: <micro-task text> (using today's date in Europe/Moscow timezone).
 
-Список сегодняшних задач:
+Today's date: {today_str}
+Today's time: 10:00
+
+Today's tasks:
 {tasks_text}
 
-Карточки для повторения:
+Flashcards for review:
 {review_text}
 
-Долгосрочная память (Memory.md):
+Long-term memory (Memory.md):
 ---
-{current_memory or "Пока пустая."}
----
-
-Долгосрочные цели (Goals.md):
----
-{goals_content or "Пока пустые."}
+{current_memory or "Empty."}
 ---
 
-Review the user's long-term goals. Suggest ONE small, actionable task for today that moves them closer to these goals, and include it in your briefing message.
+Long-term goals (Goals.md):
+---
+{goals_content or "Empty."}
+---
 
-Напиши короткий, мотивирующий брифинг на русском языке. Отметь ключевые дела, добавь блок повторения, предложи одну маленькую конкретную сегодняшнюю задачу для достижения его долгосрочных целей и пожелай продуктивного дня. Будь краток и пиши по делу.
+Write a concise, inspiring morning briefing in Russian. Highlight key tasks, add review block, suggest ONE small actionable micro-task for today that advances long-term goals, and wish productive day. Be brief and to the point.
 """)
         response = key_manager.generate_content(
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
-        brief_reply_clean = sanitize_telegram_text(response.text)
+        raw_text = response.text.strip()
+        
+        # Parse and apply tags to auto-add goal task to Tasks.md
+        tags = parse_gemini_tags(raw_text)
+        if tags:
+            apply_gemini_tags(tags)
+            print(f"[Scheduler] Morning briefing generated {len(tags)} tags")
+        
+        brief_reply_clean = sanitize_telegram_text(raw_text)
 
         if review_cards:
             review_block = "\n".join(

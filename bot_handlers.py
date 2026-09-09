@@ -5,176 +5,40 @@ from google.genai import types
 from uuid import uuid4
 import threading
 import config
+import vault_files
 from bot_instance import bot
 from key_manager import key_manager
+from logging_config import get_logger
 from drive_service import (
-    append_line_to_drive,
     delete_line_from_task_file,
-    edit_line_in_task_file,
     get_task_line_by_token,
     list_markdown_files,
     mark_task_done_by_token,
     read_json_from_drive,
     read_file_from_drive,
-    write_json_to_drive,
-    write_file_to_drive,
+    update_file_on_drive,
+    update_json_file_on_drive,
+    add_user_xp,
+    append_line_to_drive,
+)
+from ai_pipeline import (
+    apply_format_rule,
+    sanitize_telegram_text,
+    is_ai_response_empty,
+    parse_gemini_tags,
+    apply_gemini_tags,
+    extract_reply,
+    get_extraction_rules,
+    extract_task_text_from_line,
 )
 
-# === REGEX CONSTANTS ===
-TAG_LINE_RE = re.compile(
-    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|MEMORY|SCHEDULE|QUESTION|MOOD|INBOX|NOTE|CARD)\]\s*(.+)$',
-    re.MULTILINE
-)
-TASK_TIME_RE = re.compile(r'(\d{2}:\d{2})\s*\|\s*(.+)$')
-TELEGRAM_FORMAT_RULE = (
-    "IMPORTANT FORMATTING RULE: Do NOT use double asterisks `**` for bolding under any "
-    "circumstances. Telegram does not support it. Use standard single asterisks `*` or avoid bolding entirely."
-)
+logger = get_logger(__name__)
+
+AI_UNAVAILABLE_MESSAGE = "Извини, сервис ИИ сейчас временно недоступен или перегружен. Попробуй, пожалуйста, ещё раз через минуту."
 
 
 def is_me(message):
     return message.from_user.id == config.MY_TELEGRAM_ID
-
-
-def parse_gemini_tags(raw_text):
-    tags = []
-    for match in TAG_LINE_RE.finditer(raw_text):
-        tags.append((match.group(1), match.group(2).strip()))
-    return tags
-
-
-def apply_format_rule(prompt):
-    return f"{prompt}\n\n{TELEGRAM_FORMAT_RULE}"
-
-
-def sanitize_telegram_text(text):
-    return (text or "").replace("**", "*").strip()
-
-
-def extract_reply(raw_text):
-    if "[ОТВЕТ]" in raw_text:
-        body = raw_text.split("[ОТВЕТ]", 1)[1]
-    else:
-        body = raw_text
-    reply_lines = []
-    for line in body.split("\n"):
-        if TAG_LINE_RE.match(line.strip()):
-            continue
-        reply_lines.append(line)
-    return sanitize_telegram_text("\n".join(reply_lines).strip() or raw_text.strip())
-
-
-def get_extraction_rules(today_str):
-    return f"""Если из сообщения нужно извлечь данные, добавь в конце ответа ОДНУ строку на каждый тип (только если применимо):
-[TASK_ADD] ГГГГ-ММ-ДД ЧЧ:ММ | Описание задачи или рутины
-[TASK_DEL] text_to_find
-[TASK_EDIT] text_to_find || ГГГГ-ММ-ДД ЧЧ:ММ | Новое описание задачи
-[HEALTH] ГГГГ-ММ-ДД: часы
-[MEMORY] факт для долгосрочной памяти
-[SCHEDULE] ГГГГ-ММ-ДД ЧЧ:ММ | Текст напоминания
-[INBOX] сырой текст мысли или заметки
-[NOTE] Category | Text с [[wikilinks]] и #tags
-[CARD] Question | Answer
-[QUESTION] Name: суть вопроса
-
-Если пользователь просит удалить задачу, используй [TASK_DEL] и передай уникальный фрагмент текста для поиска.
-Если пользователь просит изменить задачу, используй [TASK_EDIT] в формате `старый_текст || новая_строка`.
-Если пользователь просит напомнить заранее, например "час" или "за 1 день" до события, вычисли точную дату и время напоминания и выдай [SCHEDULE] с уже рассчитанным временем.
-Если пользователь просто выгружает мысли, идеи, наблюдения или факты без явного действия, используй [INBOX].
-Если это атомарная заметка для Второго Мозга, используй [NOTE] и автоматически оборачивай ключевые сущности, концепты и имена в [[wikilinks]], а также добавляй релевантные #tags.
-Если можно сформулировать учебную карточку вопрос-ответ, используй [CARD].
-
-ВАЖНО: При сохранении Zettelkasten заметки, выводи [NOTE] Category | Rich text с [[wikilinks]] и #tags.
-Затем выводи ответ пользователю в [ОТВЕТ]. Текст в [ОТВЕТ] ДОЛЖЕН БЫТЬ ЧИСТЫМ. НЕ ставь НИКАКИХ [[wikilinks]], #tags или **bold** в секции [ОТВЕТ]. Просто напиши что-то естественное вроде "Я записал этот факт в базу знаний".
-
-Примеры распознавания:
-- "поспал 8 часов" → [HEALTH] {today_str}: 8
-- "напомни в 21:00 позвонить маме" → [SCHEDULE] {today_str} 21:00 | Позвонить маме
-- "завтра в 9 утра тренировка" → [TASK_ADD] <дата> 09:00 | Тренировка
-- "удали задачу созвон с Димой" → [TASK_DEL] созвон с Димой
-- "перенеси тренировку на завтра в 8" → [TASK_EDIT] тренировка || <новая дата> 08:00 | Тренировка
-- "идея: сделать метод для сравнения привычек" → [INBOX] идея: сделать метод для сравнения привычек
-- "концепт atomic habits помогает строить систему" → [NOTE] Productivity | [[Atomic Habits]] помогает строить систему #productivity #habits
-- "что такое Zettelkasten? | система связанных атомарных заметок" → [CARD] Что такое Zettelkasten? | Система связанных атомарных заметок
-"""
-
-
-def build_task_line(payload):
-    return f"* [ ] {payload.strip()}"
-
-
-def sanitize_note_category(category):
-    category = re.sub(r'[\\/:*?"<>|]+', '_', (category or "").strip())
-    return category or "Notes"
-
-
-def extract_task_text_from_line(task_line):
-    stripped = (task_line or "").strip()
-    stripped = re.sub(r'^[\*\-\s]*\[[ xX]\]\s*', '', stripped)
-    if "|" in stripped:
-        return stripped.split("|", 1)[1].strip().replace("⏰ REMINDER:", "", 1).strip()
-    return stripped.replace("⏰ REMINDER:", "", 1).strip()
-
-
-def apply_gemini_tags(tags):
-    for tag_type, payload in tags:
-        if not payload:
-            continue
-        try:
-            if tag_type == "TASK_ADD":
-                append_line_to_drive("Tasks.md", build_task_line(payload))
-            elif tag_type == "TASK_DEL":
-                delete_line_from_task_file(payload)
-            elif tag_type == "TASK_EDIT" and "||" in payload:
-                search_text, new_line_text = payload.split("||", 1)
-                edit_line_in_task_file(
-                    search_text.strip(),
-                    build_task_line(new_line_text)
-                )
-            elif tag_type == "FINANCE":
-                append_line_to_drive("Finance.md", f"* {payload}")
-            elif tag_type == "HEALTH":
-                append_line_to_drive("Health.md", f"* {payload}")
-            elif tag_type == "MEMORY":
-                append_line_to_drive("Memory.md", f"* {payload}")
-            elif tag_type == "QUESTION":
-                append_line_to_drive("Questions.md", f"* {payload}")
-            elif tag_type == "INBOX":
-                append_line_to_drive("Inbox.md", f"* {payload}")
-            elif tag_type == "NOTE" and "|" in payload:
-                category, note_text = payload.split("|", 1)
-                note_filename = f"{sanitize_note_category(category)}.md"
-                # Note files are automatically routed to 02-Brain folder by drive_service
-                append_line_to_drive(note_filename, f"* {note_text.strip()}")
-            elif tag_type == "CARD" and "|" in payload:
-                question, answer = payload.split("|", 1)
-                flashcards = read_json_from_drive("Flashcards.json")
-                if not isinstance(flashcards, list):
-                    flashcards = []
-                flashcards.append({
-                    "id": str(uuid4()),
-                    "q": question.strip(),
-                    "a": answer.strip(),
-                    "next_review": datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M:%S"),
-                })
-                write_json_to_drive("Flashcards.json", flashcards)
-            elif tag_type == "MOOD":
-                today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
-                append_line_to_drive("Health.md", f"* {today_str}: Mood {payload}")
-                from drive_service import add_user_xp
-                add_user_xp(5)
-            elif tag_type == "SCHEDULE" and "|" in payload:
-                dt_str, task_text = payload.split("|", 1)
-                dt_str, task_text = dt_str.strip(), task_text.strip()
-                run_date = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
-                run_date = config.msk_tz.localize(run_date)
-                task_line = f"* [ ] {dt_str} | ⏰ REMINDER: {task_text}"
-
-                from scheduler_jobs import schedule_reminder_job
-                schedule_reminder_job(config.MY_TELEGRAM_ID, task_text, run_date, task_line=task_line)
-                append_line_to_drive("Tasks.md", task_line)
-        except Exception as e:
-            print(f"[Tag Apply] Tag apply error [{tag_type}]: {e}")
 
 
 def get_forward_sender_name(message):
@@ -208,7 +72,7 @@ def get_forward_sender_name(message):
             c = getattr(origin, 'chat', None)
             if c:
                 return getattr(c, 'title', "Channel")
-        
+
         # Fallback to older telegram message fields
         if getattr(message, 'forward_from', None):
             u = message.forward_from
@@ -220,7 +84,7 @@ def get_forward_sender_name(message):
         elif getattr(message, 'forward_sender_name', None):
             return message.forward_sender_name
     except Exception as e:
-        print(f"[Forwards] Error getting forward sender name: {e}")
+        logger.error(f"[Forwards] Error getting forward sender name: {e}")
     return "Unknown Sender"
 
 
@@ -234,14 +98,13 @@ def agent_router(user_message):
     """
     try:
         # Check for URLs first
-        import re
         url_pattern = re.compile(r'https?://\S+|www\.\S+')
         has_url = bool(url_pattern.search(user_message))
-        
+
         if has_url:
-            print(f"[Agent Router] URL detected, classifying as NOTE")
+            logger.info("[Agent Router] URL detected, classifying as NOTE")
             return "NOTE"
-        
+
         prompt = apply_format_rule(f"""Analyze the user's message. Output EXACTLY ONE word: TASK, FINANCE, HEALTH, QUESTION, or NOTE.
 
 User message: "{user_message}"
@@ -250,14 +113,14 @@ User message: "{user_message}"
             model=config.MODEL_LITE,
             contents=prompt
         )
-        classification = response.text.strip().upper()
+        classification = (response.text or "").strip().upper()
         valid_classes = ["TASK", "FINANCE", "HEALTH", "QUESTION", "NOTE"]
         if classification not in valid_classes:
             classification = "QUESTION"
-        print(f"[Agent Router] Classified as: {classification}")
+        logger.info(f"[Agent Router] Classified as: {classification}")
         return classification
     except Exception as e:
-        print(f"[Agent Router] Error: {e}")
+        logger.error(f"[Agent Router] Error: {e}")
         return "QUESTION"
 
 
@@ -280,9 +143,9 @@ User thought: "{user_message}"
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
-        return response.text.strip()
+        return (response.text or "").strip()
     except Exception as e:
-        print(f"[Agent Archivist] Error: {e}")
+        logger.error(f"[Agent Archivist] Error: {e}")
         return None
 
 
@@ -306,27 +169,30 @@ Note: "{note_text}"
                 model=config.MODEL_COMPLEX,
                 contents=prompt
             )
-            card_text = response.text.strip()
-            
+            card_text = (response.text or "").strip()
+
             # Parse and save flashcard
             if "[CARD]" in card_text and "|" in card_text:
                 card_body = card_text.split("[CARD]", 1)[1].strip()
                 if "|" in card_body:
                     question, answer = card_body.split("|", 1)
-                    flashcards = read_json_from_drive("Flashcards.json")
-                    if not isinstance(flashcards, list):
-                        flashcards = []
-                    flashcards.append({
-                        "id": str(uuid4()),
-                        "q": question.strip(),
-                        "a": answer.strip(),
-                        "next_review": datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M:%S"),
-                    })
-                    write_json_to_drive("Flashcards.json", flashcards)
-                    print(f"[Agent Tutor] Flashcard generated and saved")
+
+                    def mutate(flashcards):
+                        if not isinstance(flashcards, list):
+                            flashcards = []
+                        flashcards.append({
+                            "id": str(uuid4()),
+                            "q": question.strip(),
+                            "a": answer.strip(),
+                            "next_review": datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M:%S"),
+                        })
+                        return flashcards
+
+                    update_json_file_on_drive(vault_files.FLASHCARDS, mutate, default_factory=list)
+                    logger.info("[Agent Tutor] Flashcard generated and saved")
         except Exception as e:
-            print(f"[Agent Tutor] Error: {e}")
-    
+            logger.error(f"[Agent Tutor] Error: {e}")
+
     thread = threading.Thread(target=generate_flashcard)
     thread.daemon = True
     thread.start()
@@ -353,8 +219,7 @@ def track_sleep(message):
             return
         hours = args[1]
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
-        append_line_to_drive("Health.md", f"* {today_str}: {hours}")
-        from drive_service import add_user_xp
+        append_line_to_drive(vault_files.HEALTH, f"* {today_str}: {hours}")
         add_user_xp(5)
         bot.reply_to(message, f"🛌 **Сон записан!** (+5 XP)\n\n> {today_str} · {hours} ч.")
     except Exception as e:
@@ -367,10 +232,10 @@ def quiz_flashcards(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
     try:
-        flashcards = read_json_from_drive("Flashcards.json")
+        flashcards = read_json_from_drive(vault_files.FLASHCARDS)
         if not isinstance(flashcards, list):
             flashcards = []
-        
+
         now = datetime.now(config.msk_tz)
         due_cards = []
         for card in flashcards:
@@ -381,12 +246,12 @@ def quiz_flashcards(message):
                     due_cards.append((review_dt, card))
             except Exception:
                 continue
-        
+
         due_cards.sort(key=lambda item: item[0])
         if not due_cards:
             bot.reply_to(message, "🎉 Нет карточек для повторения!")
             return
-        
+
         card = due_cards[0][1]
         keyboard = telebot.types.InlineKeyboardMarkup()
         keyboard.add(telebot.types.InlineKeyboardButton("Показать ответ", callback_data=f"show_answer:{card['id']}"))
@@ -407,7 +272,7 @@ def handle_voice(message):
         voice_info = bot.get_file(message.voice.file_id)
         downloaded_file = bot.download_file(voice_info.file_path)
 
-        current_memory = read_file_from_drive("Memory.md")
+        current_memory = read_file_from_drive(vault_files.MEMORY)
         if not current_memory.strip():
             current_memory = "Пока пустая долгосрочная память."
 
@@ -470,7 +335,10 @@ Act as an empathetic listener and coach. Respond with a short, supportive reply.
                 prompt
             ]
         )
-        raw_text = response.text
+        raw_text = response.text or ""
+        if is_ai_response_empty(raw_text):
+            bot.reply_to(message, AI_UNAVAILABLE_MESSAGE)
+            return
 
         tags = parse_gemini_tags(raw_text)
         reply_part = extract_reply(raw_text)
@@ -497,7 +365,7 @@ def handle_photo(message):
 
         now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
-        
+
         caption = message.caption or ""
         extraction_rules = get_extraction_rules(today_str)
 
@@ -527,7 +395,10 @@ Analyze this image. If it's a receipt, calculate the total and output `[FINANCE]
                 prompt
             ]
         )
-        raw_text = response.text
+        raw_text = response.text or ""
+        if is_ai_response_empty(raw_text):
+            bot.reply_to(message, AI_UNAVAILABLE_MESSAGE)
+            return
 
         tags = parse_gemini_tags(raw_text)
         reply_part = extract_reply(raw_text)
@@ -563,7 +434,19 @@ def handle_inline_query(inline_query):
             model=config.MODEL_LITE,
             contents=prompt
         )
-        raw_text = response.text
+        raw_text = response.text or ""
+
+        if is_ai_response_empty(raw_text):
+            r = telebot.types.InlineQueryResultArticle(
+                id='1',
+                title='⚠️ AI service unavailable',
+                input_message_content=telebot.types.InputTextMessageContent(
+                    message_text=f"⚠️ Не удалось распознать (сервис ИИ недоступен): {text}"
+                ),
+                description="Ничего не сохранено — попробуйте ещё раз позже."
+            )
+            bot.answer_inline_query(inline_query.id, [r], cache_time=1)
+            return
 
         tags = parse_gemini_tags(raw_text)
         apply_gemini_tags(tags)
@@ -579,7 +462,7 @@ def handle_inline_query(inline_query):
         )
         bot.answer_inline_query(inline_query.id, [r], cache_time=1)
     except Exception as e:
-        print(f"[Inline Query] Error handling query: {e}")
+        logger.error(f"[Inline Query] Error handling query: {e}")
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('task_done:') or call.data.startswith('task_snooze_1h:') or call.data.startswith('task_snooze_24h:'))
@@ -592,7 +475,7 @@ def handle_task_callback(call):
         return
     try:
         action, task_token = call.data.split(':', 1)
-        
+
         # Remove reply markup (the inline buttons) to prevent double clicks
         try:
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
@@ -603,16 +486,14 @@ def handle_task_callback(call):
             updated_line = mark_task_done_by_token(task_token)
             task_text = extract_task_text_from_line(updated_line)
             if updated_line:
-                from drive_service import add_user_xp
                 add_user_xp(10)
                 bot.answer_callback_query(call.id, "Отмечено как выполнено! +10 XP")
                 bot.send_message(call.message.chat.id, f"✅ Выполнено: **{task_text}** (+10 XP)", parse_mode="Markdown")
             else:
                 bot.answer_callback_query(call.id, "Задача уже выполнена или не найдена.")
                 bot.send_message(call.message.chat.id, "✅ Задача уже обработана или не найдена.", parse_mode="Markdown")
-                
+
         elif action in ["task_snooze_1h", "task_snooze_24h"]:
-            import datetime
             delay_hours = 1 if "1h" in action else 24
             old_task_line = get_task_line_by_token(task_token)
             if not old_task_line:
@@ -620,18 +501,18 @@ def handle_task_callback(call):
                 return
 
             task_text = extract_task_text_from_line(old_task_line)
-            run_date = datetime.datetime.now(config.msk_tz) + datetime.timedelta(hours=delay_hours)
+            run_date = datetime.now(config.msk_tz) + timedelta(hours=delay_hours)
             new_task_line = f"* [ ] {run_date.strftime('%Y-%m-%d %H:%M')} | ⏰ REMINDER: {task_text}"
 
             from scheduler_jobs import schedule_reminder_job
             delete_line_from_task_file(old_task_line)
-            append_line_to_drive("Tasks.md", new_task_line)
+            append_line_to_drive(vault_files.TASKS, new_task_line)
             schedule_reminder_job(config.MY_TELEGRAM_ID, task_text, run_date, task_line=new_task_line)
             bot.answer_callback_query(call.id, f"Отложено на {delay_hours} ч.")
             bot.send_message(call.message.chat.id, f"⏰ Напоминание **{task_text}** успешно отложено на {delay_hours} ч.", parse_mode="Markdown")
-            
+
     except Exception as e:
-        print(f"[Callback Error] Error handling task callback: {e}")
+        logger.error(f"[Callback Error] Error handling task callback: {e}")
         bot.answer_callback_query(call.id, "Произошла ошибка при обработке.")
 
 
@@ -642,20 +523,20 @@ def handle_show_answer(call):
         return
     try:
         card_id = call.data.split(':', 1)[1]
-        flashcards = read_json_from_drive("Flashcards.json")
+        flashcards = read_json_from_drive(vault_files.FLASHCARDS)
         if not isinstance(flashcards, list):
             flashcards = []
-        
+
         card = None
         for c in flashcards:
             if c.get("id") == card_id:
                 card = c
                 break
-        
+
         if not card:
             bot.answer_callback_query(call.id, "Карточка не найдена.", show_alert=True)
             return
-        
+
         keyboard = telebot.types.InlineKeyboardMarkup()
         keyboard.row(
             telebot.types.InlineKeyboardButton("Снова 1м", callback_data=f"srs:{card_id}:0.016"),
@@ -666,7 +547,7 @@ def handle_show_answer(call):
             telebot.types.InlineKeyboardButton("Неделя 7д", callback_data=f"srs:{card_id}:168")
         )
         keyboard.add(telebot.types.InlineKeyboardButton("Месяц 30д", callback_data=f"srs:{card_id}:720"))
-        
+
         bot.edit_message_text(
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
@@ -676,7 +557,7 @@ def handle_show_answer(call):
         )
         bot.answer_callback_query(call.id)
     except Exception as e:
-        print(f"[Quiz Callback] Error showing answer: {e}")
+        logger.error(f"[Quiz Callback] Error showing answer: {e}")
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
 
 
@@ -688,25 +569,24 @@ def handle_srs_review(call):
     try:
         _, card_id, interval_hours = call.data.split(':', 2)
         interval_hours = float(interval_hours)
-        
-        flashcards = read_json_from_drive("Flashcards.json")
-        if not isinstance(flashcards, list):
-            flashcards = []
-        
-        updated = False
+
         next_review = datetime.now(config.msk_tz) + timedelta(hours=interval_hours)
-        for card in flashcards:
-            if card.get("id") == card_id:
-                card["next_review"] = next_review.strftime("%Y-%m-%d %H:%M:%S")
-                updated = True
-                break
-        
-        if not updated:
+
+        def mutate(flashcards):
+            if not isinstance(flashcards, list):
+                return None
+            for card in flashcards:
+                if card.get("id") == card_id:
+                    card["next_review"] = next_review.strftime("%Y-%m-%d %H:%M:%S")
+                    return flashcards
+            return None
+
+        result = update_json_file_on_drive(vault_files.FLASHCARDS, mutate, default_factory=list)
+
+        if result is None:
             bot.answer_callback_query(call.id, "Карточка не найдена.", show_alert=True)
             return
-        
-        write_json_to_drive("Flashcards.json", flashcards)
-        
+
         bot.edit_message_text(
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
@@ -714,11 +594,11 @@ def handle_srs_review(call):
             reply_markup=None
         )
         bot.answer_callback_query(call.id)
-        
+
         # Automatically send next due card
         quiz_flashcards(call.message)
     except Exception as e:
-        print(f"[Quiz Callback] Error handling SRS: {e}")
+        logger.error(f"[Quiz Callback] Error handling SRS: {e}")
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
 
 
@@ -731,15 +611,15 @@ def handle_journal_command(message):
         # Extract journaling text
         args = message.text.split(maxsplit=1)
         journal_text = args[1].strip() if len(args) > 1 else ""
-        
+
         # If no text in the command, check if they replied to a message
         if not journal_text and message.reply_to_message:
             journal_text = message.reply_to_message.text or message.reply_to_message.caption or ""
-            
+
         if not journal_text:
             bot.reply_to(message, "Пожалуйста, напиши свои мысли после команды `/journal` или ответь этой командой на сообщение. Например:\n`/journal Сегодня был прекрасный продуктивный день.`")
             return
-            
+
         now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
 
@@ -762,7 +642,10 @@ Act as an empathetic listener and coach. Respond with a short, supportive reply.
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
-        raw_text = response.text
+        raw_text = response.text or ""
+        if is_ai_response_empty(raw_text):
+            bot.reply_to(message, AI_UNAVAILABLE_MESSAGE)
+            return
 
         tags = parse_gemini_tags(raw_text)
         reply_part = extract_reply(raw_text)
@@ -790,16 +673,16 @@ def handle_brain_search(message):
         query = args[1].strip()
 
         # Read context files
-        tasks = read_file_from_drive("Tasks.md")
-        finance = read_file_from_drive("Finance.md")
-        health = read_file_from_drive("Health.md")
-        memory = read_file_from_drive("Memory.md")
-        goals = read_file_from_drive("Goals.md")
+        tasks = read_file_from_drive(vault_files.TASKS)
+        finance = read_file_from_drive(vault_files.FINANCE)
+        health = read_file_from_drive(vault_files.HEALTH)
+        memory = read_file_from_drive(vault_files.MEMORY)
+        goals = read_file_from_drive(vault_files.GOALS)
 
         # Combine into context, safely truncating each to prevent context limit issues (e.g. max 4000 chars each)
         def truncate_context(text, max_chars=4000):
             if len(text) > max_chars:
-                return text[-max_chars:] # take recent part
+                return text[-max_chars:]  # take recent part
             return text
 
         context = f"""[ФАЙЛ Goals.md]
@@ -834,9 +717,12 @@ Write a comprehensive, deep, and structured analysis or answer in Russian langua
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
-        reply = sanitize_telegram_text(response.text)
-        
-        bot.reply_to(message, reply)
+        raw_text = response.text or ""
+        if is_ai_response_empty(raw_text):
+            bot.reply_to(message, AI_UNAVAILABLE_MESSAGE)
+            return
+
+        bot.reply_to(message, sanitize_telegram_text(raw_text))
     except Exception as e:
         bot.reply_to(message, f"Ошибка поиска по Второму Мозгу: {e}")
 
@@ -892,7 +778,11 @@ Notes:
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
-        bot.reply_to(message, sanitize_telegram_text(response.text))
+        raw_text = response.text or ""
+        if is_ai_response_empty(raw_text):
+            bot.reply_to(message, AI_UNAVAILABLE_MESSAGE)
+            return
+        bot.reply_to(message, sanitize_telegram_text(raw_text))
     except Exception as e:
         bot.reply_to(message, f"Ошибка глобального поиска: {e}")
 
@@ -903,7 +793,7 @@ def handle_digest(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
     try:
-        raw_inbox = read_file_from_drive("Raw_Inbox.md")
+        raw_inbox = read_file_from_drive(vault_files.RAW_INBOX)
         if not raw_inbox.strip():
             bot.reply_to(message, "Raw_Inbox пуст.")
             return
@@ -925,10 +815,20 @@ Raw_Inbox.md:
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
-        raw_text = response.text.strip()
+        raw_text = (response.text or "").strip()
         tags = parse_gemini_tags(raw_text)
         apply_gemini_tags(tags)
-        write_file_to_drive("Raw_Inbox.md", "")
+
+        def clear_if_unchanged(current_content):
+            # Only clear the file if nothing was appended to it (e.g. via the
+            # external webhook) while the AI call above was in flight -
+            # otherwise we'd silently discard that new content.
+            if current_content != raw_inbox:
+                logger.warning("[Digest] Raw_Inbox.md changed during processing; leaving new content in place.")
+                return None
+            return ""
+
+        update_file_on_drive(vault_files.RAW_INBOX, clear_if_unchanged)
         bot.reply_to(message, f"📥 Inbox разобран. Извлечено тегов: {len(tags)}")
     except Exception as e:
         bot.reply_to(message, f"Ошибка digest: {e}")
@@ -940,7 +840,7 @@ def handle_process_inbox(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
     try:
-        inbox_content = read_file_from_drive("Inbox.md")
+        inbox_content = read_file_from_drive(vault_files.INBOX)
         if not inbox_content.strip():
             bot.reply_to(message, "Inbox пуст.")
             return
@@ -973,10 +873,17 @@ Inbox.md:
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
-        raw_text = response.text.strip()
+        raw_text = (response.text or "").strip()
         tags = parse_gemini_tags(raw_text)
         apply_gemini_tags(tags)
-        write_file_to_drive("Inbox.md", "")
+
+        def clear_if_unchanged(current_content):
+            if current_content != inbox_content:
+                logger.warning("[Process Inbox] Inbox.md changed during processing; leaving new content in place.")
+                return None
+            return ""
+
+        update_file_on_drive(vault_files.INBOX, clear_if_unchanged)
         bot.reply_to(message, f"🗂 Inbox обработан. Извлечено тегов: {len(tags)}")
     except Exception as e:
         bot.reply_to(message, f"Ошибка process: {e}")
@@ -994,11 +901,11 @@ def chat_with_gemini(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
     try:
-        current_memory = read_file_from_drive("Memory.md")
+        current_memory = read_file_from_drive(vault_files.MEMORY)
         if not current_memory.strip():
             current_memory = "Пока пустая долгосрочная память."
 
-        current_tasks = read_file_from_drive("Tasks.md")
+        current_tasks = read_file_from_drive(vault_files.TASKS)
         if not current_tasks.strip():
             current_tasks = "Пока нет задач."
 
@@ -1015,7 +922,7 @@ def chat_with_gemini(message):
 
         # Multi-Agent Pipeline: Router
         classification = agent_router(user_message_text)
-        print(f"[Multi-Agent Pipeline] Router classified as: {classification}")
+        logger.info(f"[Multi-Agent Pipeline] Router classified as: {classification}")
 
         # If NOTE, use Archivist agent
         if classification == "NOTE":
@@ -1024,13 +931,13 @@ def chat_with_gemini(message):
                 # Parse and save the note
                 tags = parse_gemini_tags(note_output)
                 apply_gemini_tags(tags)
-                
+
                 # Extract note text for background Tutor
                 if "|" in note_output:
                     note_body = note_output.split("|", 1)[1].strip()
                     # Trigger background Agent Tutor
                     agent_tutor_background(note_body)
-                
+
                 reply_part = f"📝 Заметка сохранена: {note_output.replace('[NOTE]', '').strip()}"
                 if not reply_part or not reply_part.strip():
                     reply_part = "Успешно записал новые знания в твой мозг! 🧠"
@@ -1044,7 +951,7 @@ def chat_with_gemini(message):
         else:
             selected_model = config.MODEL_LITE
 
-        print(f"[Model Router] Routing input (length={text_len}, forwarded={is_forwarded}) to model: {selected_model}")
+        logger.info(f"[Model Router] Routing input (length={text_len}, forwarded={is_forwarded}) to model: {selected_model}")
         extraction_rules = get_extraction_rules(today_str)
 
         prompt = apply_format_rule(f"""Текущее время в Москве: {now_msk}
@@ -1085,7 +992,10 @@ You have access to the user's tasks (Tasks.md). If the user asks about their sch
             model=selected_model,
             contents=prompt
         )
-        raw_text = response.text
+        raw_text = response.text or ""
+        if is_ai_response_empty(raw_text):
+            bot.reply_to(message, AI_UNAVAILABLE_MESSAGE)
+            return
 
         tags = parse_gemini_tags(raw_text)
         reply_part = extract_reply(raw_text)
@@ -1110,7 +1020,7 @@ def process_external_text(text):
     Exposes AI tag processing for external requests (Siri/shortcuts).
     """
     try:
-        current_memory = read_file_from_drive("Memory.md")
+        current_memory = read_file_from_drive(vault_files.MEMORY)
         if not current_memory.strip():
             current_memory = "Пока пустая долгосрочная память."
 
@@ -1141,7 +1051,9 @@ S1get пишет (через Siri/Shortcut): "{text}"
             model=config.MODEL_LITE,
             contents=prompt
         )
-        raw_text = response.text
+        raw_text = response.text or ""
+        if is_ai_response_empty(raw_text):
+            return {"success": False, "error": "AI service temporarily unavailable"}
 
         tags = parse_gemini_tags(raw_text)
         reply_part = extract_reply(raw_text)
@@ -1152,7 +1064,7 @@ S1get пишет (через Siri/Shortcut): "{text}"
             "tags_found": [t[0] for t in tags]
         }
     except Exception as e:
-        print(f"[External Process] Error: {e}")
+        logger.error(f"[External Process] Error: {e}")
         return {
             "success": False,
             "error": str(e)

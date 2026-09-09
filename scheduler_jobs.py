@@ -3,40 +3,38 @@ import re
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 import config
+import vault_files
 from bot_instance import bot
 from key_manager import key_manager
+from logging_config import get_logger
 from drive_service import (
     get_today_tasks,
     get_task_line_token,
     read_json_from_drive,
     read_file_from_drive,
     read_or_create_goals,
-    append_line_to_drive,
+    update_file_on_drive,
 )
-from bot_handlers import parse_gemini_tags, apply_gemini_tags
+from ai_pipeline import (
+    apply_format_rule,
+    sanitize_telegram_text,
+    is_ai_response_empty,
+    parse_gemini_tags,
+    apply_gemini_tags,
+)
+
+logger = get_logger(__name__)
 
 # Initialize BackgroundScheduler with Moscow Timezone
 scheduler = BackgroundScheduler(timezone=config.msk_tz)
 TASK_LINE_RE = re.compile(r'^\s*[\*\-]?\s*\[(?P<status>[ xX])\]\s*(?P<body>.+)$')
 TASK_DATETIME_RE = re.compile(r'(?P<dt>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*\|\s*(?P<text>.+)$')
-TELEGRAM_FORMAT_RULE = (
-    "IMPORTANT FORMATTING RULE: Do NOT use double asterisks `**` for bolding under any "
-    "circumstances. Telegram does not support it. Use standard single asterisks `*` or avoid bolding entirely."
-)
 
 
 def _normalize_run_date(run_date):
     if run_date.tzinfo is None:
         return config.msk_tz.localize(run_date)
     return run_date.astimezone(config.msk_tz)
-
-
-def apply_format_rule(prompt):
-    return f"{prompt}\n\n{TELEGRAM_FORMAT_RULE}"
-
-
-def sanitize_telegram_text(text):
-    return (text or "").replace("**", "*").strip()
 
 
 def _clean_reminder_text(task_text):
@@ -69,7 +67,7 @@ def schedule_reminder_job(chat_id, task_text, run_date, task_line=None):
 def restore_reminders_on_startup(bot_instance):
     try:
         now = datetime.now(config.msk_tz)
-        content = read_file_from_drive("Tasks.md")
+        content = read_file_from_drive(vault_files.TASKS)
         if not content.strip():
             return 0
 
@@ -106,10 +104,10 @@ def restore_reminders_on_startup(bot_instance):
             )
             restored_count += 1
 
-        print(f"[Scheduler] Restored {restored_count} reminders/tasks from Tasks.md on startup.")
+        logger.info(f"[Scheduler] Restored {restored_count} reminders/tasks from Tasks.md on startup.")
         return restored_count
     except Exception as e:
-        print(f"[Scheduler] Reminder restore error: {e}")
+        logger.error(f"[Scheduler] Reminder restore error: {e}")
         return 0
 
 def send_dynamic_reminder(chat_id, task_text, task_line=None):
@@ -124,7 +122,8 @@ def send_dynamic_reminder(chat_id, task_text, task_line=None):
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
-        reply = sanitize_telegram_text(response.text)
+        raw_text = response.text or ""
+        reply = sanitize_telegram_text(raw_text) if not is_ai_response_empty(raw_text) else f"Пора делать: {task_text}"
     except Exception:
         reply = f"Пора делать: {task_text}"
     try:
@@ -137,10 +136,10 @@ def send_dynamic_reminder(chat_id, task_text, task_line=None):
         btn_snooze_1h = telebot.types.InlineKeyboardButton("⏰ Snooze 1h", callback_data=f"task_snooze_1h:{task_token}")
         btn_snooze_24h = telebot.types.InlineKeyboardButton("📅 Tomorrow", callback_data=f"task_snooze_24h:{task_token}")
         markup.add(btn_done, btn_snooze_1h, btn_snooze_24h)
-        
+
         bot.send_message(chat_id, f"⏰ **НАПОМИНАНИЕ!**\n\n{reply}", reply_markup=markup)
     except Exception as e:
-        print(f"[Scheduler] Dynamic reminder send error: {e}")
+        logger.error(f"[Scheduler] Dynamic reminder send error: {e}")
 
 
 def check_daily_sleep():
@@ -149,14 +148,14 @@ def check_daily_sleep():
     """
     try:
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
-        health_content = read_file_from_drive("Health.md")
+        health_content = read_file_from_drive(vault_files.HEALTH)
         if today_str not in health_content:
             bot.send_message(
                 config.MY_TELEGRAM_ID,
                 "Павел, доброе утро! 🛌 Я заметил, что сегодня ты еще не записал свой сон. Расскажи, сколько часов удалось поспать и как самочувствие?",
             )
     except Exception as e:
-        print(f"[Scheduler] Sleep check error: {e}")
+        logger.error(f"[Scheduler] Sleep check error: {e}")
 
 
 def evening_planning_reminder():
@@ -169,7 +168,7 @@ def evening_planning_reminder():
             "Павел, время вечернего планирования! 🌙 Пора разобрать дела и составить план на завтра, чтобы лечь спать с чистой головой.",
         )
     except Exception as e:
-        print(f"[Scheduler] Evening reminder error: {e}")
+        logger.error(f"[Scheduler] Evening reminder error: {e}")
 
 
 def compress_memory():
@@ -178,10 +177,10 @@ def compress_memory():
     Executed every Sunday at 03:00 AM.
     """
     try:
-        print("[Scheduler] Starting weekly memory compression job...")
-        content = read_file_from_drive("Memory.md")
+        logger.info("[Scheduler] Starting weekly memory compression job...")
+        content = read_file_from_drive(vault_files.MEMORY)
         if not content.strip():
-            print("[Scheduler] Memory.md is empty, skipping compression.")
+            logger.info("[Scheduler] Memory.md is empty, skipping compression.")
             return
 
         prompt = apply_format_rule(f"""This is a long-term memory file. Compress it, remove duplicates, and keep only the most important facts as a concise list.
@@ -197,15 +196,35 @@ Output only the resulting compressed list in Markdown format (using bullet point
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
-        compressed_text = sanitize_telegram_text(response.text)
+        raw_text = response.text or ""
+        if is_ai_response_empty(raw_text):
+            logger.warning("[Scheduler] Memory compression AI response was empty, skipping update.")
+            return
+
+        compressed_text = sanitize_telegram_text(raw_text)
 
         if compressed_text:
-            write_file_to_drive("Memory.md", compressed_text)
-            print("[Scheduler] Memory.md successfully compressed and updated.")
+            def mutate(current_content):
+                # The AI compressed a specific snapshot of Memory.md (`content`,
+                # read above). If the file changed since then - e.g. the user
+                # added a new [MEMORY] fact while this job was waiting on the
+                # AI call - overwriting now would silently drop that fact.
+                # Bail out and let next week's run compress it instead.
+                if current_content != content:
+                    logger.warning(
+                        "[Scheduler] Memory.md changed while compression was in progress; "
+                        "skipping this write to avoid discarding the newer content."
+                    )
+                    return None
+                return compressed_text
+
+            result = update_file_on_drive(vault_files.MEMORY, mutate)
+            if result is not None:
+                logger.info("[Scheduler] Memory.md successfully compressed and updated.")
         else:
-            print("[Scheduler] Warning: Compressed memory content is empty, skipping update.")
+            logger.warning("[Scheduler] Warning: Compressed memory content is empty, skipping update.")
     except Exception as e:
-        print(f"[Scheduler] Error compressing memory: {e}")
+        logger.error(f"[Scheduler] Error compressing memory: {e}")
 
 
 def auto_archive_stale_tasks():
@@ -214,49 +233,66 @@ def auto_archive_stale_tasks():
     Returns the number of archived tasks.
     """
     try:
-        content = read_file_from_drive("Tasks.md")
-        if not content.strip():
-            return 0
-            
-        lines = content.split("\n")
-        remaining_lines = []
-        stale_tasks = []
-        
         date_pattern = re.compile(r'\d{4}-\d{2}-\d{2}')
         now = datetime.now(config.msk_tz)
         seven_days_ago = now - timedelta(days=7)
-        
-        for line in lines:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            
-            is_open = "[ ]" in stripped
-            if is_open:
-                m = date_pattern.search(stripped)
-                if m:
-                    try:
-                        task_date = datetime.strptime(m.group(0), "%Y-%m-%d")
-                        task_date = config.msk_tz.localize(task_date)
-                        if task_date < seven_days_ago:
-                            stale_tasks.append(line)
-                            continue
-                    except Exception:
-                        pass
-            remaining_lines.append(line)
-            
+        stale_tasks_holder = {"lines": []}
+
+        def mutate_tasks(content):
+            if not content.strip():
+                return None
+            lines = content.split("\n")
+            remaining_lines = []
+            stale_tasks = []
+
+            for line in lines:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+
+                is_open = "[ ]" in stripped
+                if is_open:
+                    m = date_pattern.search(stripped)
+                    if m:
+                        try:
+                            task_date = datetime.strptime(m.group(0), "%Y-%m-%d")
+                            task_date = config.msk_tz.localize(task_date)
+                            if task_date < seven_days_ago:
+                                stale_tasks.append(line)
+                                continue
+                        except Exception:
+                            pass
+                remaining_lines.append(line)
+
+            if not stale_tasks:
+                return None
+            stale_tasks_holder["lines"] = stale_tasks
+            return "\n".join(remaining_lines)
+
+        # Both Tasks.md and Icebox.md are updated under their own per-file
+        # lock (via update_file_on_drive) so a concurrent write to either
+        # file can't be lost mid-archive.
+        tasks_result = update_file_on_drive(vault_files.TASKS, mutate_tasks)
+        if tasks_result is None:
+            # Either there was nothing stale to remove, or the Drive write
+            # itself failed after mutate_tasks() ran - in both cases nothing
+            # was actually removed from Tasks.md, so nothing should be
+            # copied into Icebox.md either (that would duplicate the task).
+            return 0
+
+        stale_tasks = stale_tasks_holder["lines"]
+
         if stale_tasks:
-            write_file_to_drive("Tasks.md", "\n".join(remaining_lines))
-            icebox_content = read_file_from_drive("Icebox.md")
-            if icebox_content.strip():
-                icebox_content = icebox_content.rstrip() + "\n" + "\n".join(stale_tasks)
-            else:
-                icebox_content = "# Icebox (Someday/Maybe)\n\n" + "\n".join(stale_tasks)
-            write_file_to_drive("Icebox.md", icebox_content)
-            
+            def mutate_icebox(icebox_content):
+                if icebox_content.strip():
+                    return icebox_content.rstrip() + "\n" + "\n".join(stale_tasks)
+                return "# Icebox (Someday/Maybe)\n\n" + "\n".join(stale_tasks)
+
+            update_file_on_drive(vault_files.ICEBOX, mutate_icebox)
+
         return len(stale_tasks)
     except Exception as e:
-        print(f"[Auto-Archiver] Error: {e}")
+        logger.error(f"[Auto-Archiver] Error: {e}")
         return 0
 
 
@@ -267,15 +303,14 @@ def morning_briefing():
     Auto-adds goal-driven micro-tasks to Tasks.md via parse_gemini_tags.
     """
     try:
-        print("[Scheduler] Starting morning briefing job...")
+        logger.info("[Scheduler] Starting morning briefing job...")
         today_tasks = get_today_tasks()
-        current_memory = read_file_from_drive("Memory.md")
+        current_memory = read_file_from_drive(vault_files.MEMORY)
         goals_content = read_or_create_goals()
-        tasks_content = read_file_from_drive("Tasks.md")
-        flashcards = read_json_from_drive("Flashcards.json")
+        flashcards = read_json_from_drive(vault_files.FLASHCARDS)
         now = datetime.now(config.msk_tz)
         today_str = now.strftime("%Y-%m-%d")
-        
+
         # Format today's tasks
         tasks_text = ""
         if today_tasks:
@@ -336,14 +371,17 @@ Write a concise, inspiring morning briefing in Russian. Highlight key tasks, add
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
-        raw_text = response.text.strip()
-        
+        raw_text = (response.text or "").strip()
+        if is_ai_response_empty(raw_text):
+            logger.warning("[Scheduler] Morning briefing AI response was empty, skipping send.")
+            return
+
         # Parse and apply tags to auto-add goal task to Tasks.md
         tags = parse_gemini_tags(raw_text)
         if tags:
             apply_gemini_tags(tags)
-            print(f"[Scheduler] Morning briefing generated {len(tags)} tags")
-        
+            logger.info(f"[Scheduler] Morning briefing generated {len(tags)} tags")
+
         brief_reply_clean = sanitize_telegram_text(raw_text)
 
         if review_cards:
@@ -352,15 +390,15 @@ Write a concise, inspiring morning briefing in Russian. Highlight key tasks, add
                 for card in review_cards
             )
             brief_reply_clean = f"{brief_reply_clean}\n\n{review_block}"
-        
+
         bot.send_message(
             config.MY_TELEGRAM_ID,
             f"☀️ ЕЖЕДНЕВНЫЙ УТРЕННИЙ БРИФИНГ\n\n{brief_reply_clean}"
         )
 
-        print("[Scheduler] Morning briefing successfully sent.")
+        logger.info("[Scheduler] Morning briefing successfully sent.")
     except Exception as e:
-        print(f"[Scheduler] Error generating morning briefing: {e}")
+        logger.error(f"[Scheduler] Error generating morning briefing: {e}")
 
 
 def weekly_audit():
@@ -368,29 +406,29 @@ def weekly_audit():
     Weekly cron job at 20:00 Sunday (Moscow time) analyzing the past 7 days.
     """
     try:
-        print("[Scheduler] Starting weekly audit job...")
-        
+        logger.info("[Scheduler] Starting weekly audit job...")
+
         # Anti-Burnout Auto-Archiver
         archived_count = auto_archive_stale_tasks()
-        
+
         now = datetime.now(config.msk_tz)
         dates = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
-        
-        tasks_content = read_file_from_drive("Tasks.md")
-        finance_content = read_file_from_drive("Finance.md")
-        health_content = read_file_from_drive("Health.md")
-        
+
+        tasks_content = read_file_from_drive(vault_files.TASKS)
+        finance_content = read_file_from_drive(vault_files.FINANCE)
+        health_content = read_file_from_drive(vault_files.HEALTH)
+
         def filter_last_7_days(content, dates_list):
             filtered = []
             for line in content.split("\n"):
                 if any(d in line for d in dates_list):
                     filtered.append(line)
             return "\n".join(filtered)
-            
+
         tasks_7d = filter_last_7_days(tasks_content, dates)
         finance_7d = filter_last_7_days(finance_content, dates)
         health_7d = filter_last_7_days(health_content, dates)
-        
+
         prompt = apply_format_rule(f"""Act as a strict but supportive life coach. Analyze this 7-day data.
 Summarize spending, average sleep, and task completion. Provide 1 actionable insight and ask for next week's goals.
 
@@ -417,11 +455,16 @@ Write a comprehensive, professional, yet warm and inspiring Markdown report. Del
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
-        report = sanitize_telegram_text(response.text)
-        
+        raw_text = response.text or ""
+        if is_ai_response_empty(raw_text):
+            logger.warning("[Scheduler] Weekly audit AI response was empty, skipping send.")
+            return
+
+        report = sanitize_telegram_text(raw_text)
+
         # Append anti-burnout stat
         report += f"\n\n🧊 Moved {archived_count} stale tasks to the Icebox."
-        
+
         try:
             bot.send_message(
                 config.MY_TELEGRAM_ID,
@@ -429,14 +472,14 @@ Write a comprehensive, professional, yet warm and inspiring Markdown report. Del
                 parse_mode="Markdown"
             )
         except Exception as parse_err:
-            print(f"[Scheduler] Telegram markdown parsing failed, trying HTML/plain: {parse_err}")
+            logger.warning(f"[Scheduler] Telegram markdown parsing failed, trying HTML/plain: {parse_err}")
             bot.send_message(
                 config.MY_TELEGRAM_ID,
                 f"📊 ЕЖЕНЕДЕЛЬНЫЙ ИНФОРМАЦИОННЫЙ АУДИТ (RESET)\n\n{report}"
             )
-        print("[Scheduler] Weekly audit successfully sent.")
+        logger.info("[Scheduler] Weekly audit successfully sent.")
     except Exception as e:
-        print(f"[Scheduler] Error generating weekly audit: {e}")
+        logger.error(f"[Scheduler] Error generating weekly audit: {e}")
 
 
 # Register scheduled cron jobs

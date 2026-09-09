@@ -37,6 +37,68 @@ logger = get_logger(__name__)
 AI_UNAVAILABLE_MESSAGE = "Извини, сервис ИИ сейчас временно недоступен или перегружен. Попробуй, пожалуйста, ещё раз через минуту."
 
 
+class StatusMessage:
+    """
+    A single Telegram message, edited in place to show pipeline progress
+    (ARCHITECTURE.md step 5) instead of leaving the user watching a bare
+    "typing..." indicator for however long the AI call takes. Threaded as
+    a reply to the original message, same as a normal bot.reply_to would be.
+
+    Any failure here (network hiccup editing/sending) is logged and
+    swallowed - status UX is a nice-to-have and must never be what breaks
+    a reply the user is actually waiting for.
+    """
+
+    def __init__(self, message, initial_text="🧠 Думаю..."):
+        self._chat_id = message.chat.id
+        self._message_id = None
+        self._last_text = None
+        try:
+            sent = bot.reply_to(message, initial_text)
+            self._message_id = sent.message_id
+            self._last_text = initial_text
+        except Exception as e:
+            logger.warning(f"[StatusMessage] Failed to send initial status message: {e}")
+
+    def update(self, text):
+        if not self._message_id or text == self._last_text:
+            return
+        try:
+            bot.edit_message_text(chat_id=self._chat_id, message_id=self._message_id, text=text)
+            self._last_text = text
+        except Exception as e:
+            logger.warning(f"[StatusMessage] Failed to update status message: {e}")
+
+    def finish(self, final_text):
+        final_text = final_text or "Готово."
+        if not self._message_id:
+            try:
+                bot.send_message(self._chat_id, final_text)
+            except Exception as e:
+                logger.warning(f"[StatusMessage] Failed to send final message: {e}")
+            return
+        try:
+            bot.edit_message_text(chat_id=self._chat_id, message_id=self._message_id, text=final_text)
+        except Exception as e:
+            logger.warning(f"[StatusMessage] Failed to finalize status message, sending a new one: {e}")
+            try:
+                bot.send_message(self._chat_id, final_text)
+            except Exception:
+                pass
+
+
+def _fallback_note(response):
+    """
+    Small suffix appended to a reply when key_manager had to rotate to a
+    different API key or fall back to MODEL_LITE to get this response
+    (ARCHITECTURE.md step 5's "прозрачность процесса" - the user asked to
+    see when the bot switched to a backup instead of it happening silently).
+    """
+    if getattr(response, "used_fallback", False):
+        return "\n\n⚡ (ответ подготовлен через резервный ключ/модель — основной сервис был временно недоступен)"
+    return ""
+
+
 def is_me(message):
     return message.from_user.id == config.MY_TELEGRAM_ID
 
@@ -268,6 +330,7 @@ def handle_voice(message):
     if not is_me(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
+    status = StatusMessage(message, "🎙️ Слушаю голосовое...")
     try:
         voice_info = bot.get_file(message.voice.file_id)
         downloaded_file = bot.download_file(voice_info.file_path)
@@ -337,16 +400,16 @@ Act as an empathetic listener and coach. Respond with a short, supportive reply.
         )
         raw_text = response.text or ""
         if is_ai_response_empty(raw_text):
-            bot.reply_to(message, AI_UNAVAILABLE_MESSAGE)
+            status.finish(AI_UNAVAILABLE_MESSAGE)
             return
 
         tags = parse_gemini_tags(raw_text)
         reply_part = extract_reply(raw_text)
         apply_gemini_tags(tags)
 
-        bot.reply_to(message, reply_part)
+        status.finish(reply_part + _fallback_note(response))
     except Exception as e:
-        bot.reply_to(message, f"Ошибка обработки голосового сообщения: {e}")
+        status.finish(f"Ошибка обработки голосового сообщения: {e}")
 
 
 @bot.message_handler(content_types=['photo'])
@@ -357,6 +420,7 @@ def handle_photo(message):
     if not is_me(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
+    status = StatusMessage(message, "🖼️ Смотрю изображение...")
     try:
         # Get highest resolution photo
         photo = message.photo[-1]
@@ -397,16 +461,16 @@ Analyze this image. If it's a receipt, calculate the total and output `[FINANCE]
         )
         raw_text = response.text or ""
         if is_ai_response_empty(raw_text):
-            bot.reply_to(message, AI_UNAVAILABLE_MESSAGE)
+            status.finish(AI_UNAVAILABLE_MESSAGE)
             return
 
         tags = parse_gemini_tags(raw_text)
         reply_part = extract_reply(raw_text)
         apply_gemini_tags(tags)
 
-        bot.reply_to(message, reply_part)
+        status.finish(reply_part + _fallback_note(response))
     except Exception as e:
-        bot.reply_to(message, f"Ошибка обработки изображения: {e}")
+        status.finish(f"Ошибка обработки изображения: {e}")
 
 
 @bot.inline_handler(func=lambda query: len(query.query) > 0)
@@ -620,6 +684,7 @@ def handle_journal_command(message):
             bot.reply_to(message, "Пожалуйста, напиши свои мысли после команды `/journal` или ответь этой командой на сообщение. Например:\n`/journal Сегодня был прекрасный продуктивный день.`")
             return
 
+        status = StatusMessage(message, "📔 Читаю запись...")
         now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
 
@@ -644,14 +709,14 @@ Act as an empathetic listener and coach. Respond with a short, supportive reply.
         )
         raw_text = response.text or ""
         if is_ai_response_empty(raw_text):
-            bot.reply_to(message, AI_UNAVAILABLE_MESSAGE)
+            status.finish(AI_UNAVAILABLE_MESSAGE)
             return
 
         tags = parse_gemini_tags(raw_text)
         reply_part = extract_reply(raw_text)
         apply_gemini_tags(tags)
 
-        bot.reply_to(message, reply_part)
+        status.finish(reply_part + _fallback_note(response))
     except Exception as e:
         bot.reply_to(message, f"Ошибка записи дневника: {e}")
 
@@ -671,6 +736,7 @@ def handle_brain_search(message):
             bot.reply_to(message, "Задай вопрос своему Второму Мозгу. Пример: `/brain Как продвигаются мои цели по здоровью?`", parse_mode="Markdown")
             return
         query = args[1].strip()
+        status = StatusMessage(message, "🧠 Читаю Второй Мозг...")
 
         # Read context files
         tasks = read_file_from_drive(vault_files.TASKS)
@@ -719,10 +785,10 @@ Write a comprehensive, deep, and structured analysis or answer in Russian langua
         )
         raw_text = response.text or ""
         if is_ai_response_empty(raw_text):
-            bot.reply_to(message, AI_UNAVAILABLE_MESSAGE)
+            status.finish(AI_UNAVAILABLE_MESSAGE)
             return
 
-        bot.reply_to(message, sanitize_telegram_text(raw_text))
+        status.finish(sanitize_telegram_text(raw_text) + _fallback_note(response))
     except Exception as e:
         bot.reply_to(message, f"Ошибка поиска по Второму Мозгу: {e}")
 
@@ -744,6 +810,7 @@ def handle_global_search(message):
             bot.reply_to(message, "Не удалось найти Markdown-файлы в Google Drive.")
             return
 
+        status = StatusMessage(message, "🔍 Ищу по заметкам...")
         collected_chunks = []
         total_chars = 0
         for file_meta in files:
@@ -761,7 +828,7 @@ def handle_global_search(message):
             total_chars += len(snippet)
 
         if not collected_chunks:
-            bot.reply_to(message, "Файлы найдены, но их содержимое пустое.")
+            status.finish("Файлы найдены, но их содержимое пустое.")
             return
 
         notes_context = "\n\n".join(collected_chunks)
@@ -780,9 +847,9 @@ Notes:
         )
         raw_text = response.text or ""
         if is_ai_response_empty(raw_text):
-            bot.reply_to(message, AI_UNAVAILABLE_MESSAGE)
+            status.finish(AI_UNAVAILABLE_MESSAGE)
             return
-        bot.reply_to(message, sanitize_telegram_text(raw_text))
+        status.finish(sanitize_telegram_text(raw_text) + _fallback_note(response))
     except Exception as e:
         bot.reply_to(message, f"Ошибка глобального поиска: {e}")
 
@@ -900,6 +967,7 @@ def chat_with_gemini(message):
     if not is_me(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
+    status = StatusMessage(message)
     try:
         current_memory = read_file_from_drive(vault_files.MEMORY)
         if not current_memory.strip():
@@ -921,11 +989,13 @@ def chat_with_gemini(message):
             user_message_text = message.text
 
         # Multi-Agent Pipeline: Router
+        status.update("🔎 Анализирую сообщение...")
         classification = agent_router(user_message_text)
         logger.info(f"[Multi-Agent Pipeline] Router classified as: {classification}")
 
         # If NOTE, use Archivist agent
         if classification == "NOTE":
+            status.update("📝 Пишу заметку в базу знаний...")
             note_output = agent_archivist(user_message_text)
             if note_output and "[NOTE]" in note_output:
                 # Parse and save the note
@@ -941,7 +1011,7 @@ def chat_with_gemini(message):
                 reply_part = f"📝 Заметка сохранена: {note_output.replace('[NOTE]', '').strip()}"
                 if not reply_part or not reply_part.strip():
                     reply_part = "Успешно записал новые знания в твой мозг! 🧠"
-                bot.reply_to(message, reply_part)
+                status.finish(reply_part)
                 return
 
         # For other classifications, use standard flow
@@ -952,6 +1022,7 @@ def chat_with_gemini(message):
             selected_model = config.MODEL_LITE
 
         logger.info(f"[Model Router] Routing input (length={text_len}, forwarded={is_forwarded}) to model: {selected_model}")
+        status.update("💬 Готовлю ответ...")
         extraction_rules = get_extraction_rules(today_str)
 
         prompt = apply_format_rule(f"""Текущее время в Москве: {now_msk}
@@ -994,7 +1065,7 @@ You have access to the user's tasks (Tasks.md). If the user asks about their sch
         )
         raw_text = response.text or ""
         if is_ai_response_empty(raw_text):
-            bot.reply_to(message, AI_UNAVAILABLE_MESSAGE)
+            status.finish(AI_UNAVAILABLE_MESSAGE)
             return
 
         tags = parse_gemini_tags(raw_text)
@@ -1010,9 +1081,9 @@ You have access to the user's tasks (Tasks.md). If the user asks about their sch
         # Prevent empty reply to avoid Telegram 400 errors
         if not reply_part or not reply_part.strip():
             reply_part = "Успешно записал новые знания в твой мозг! 🧠"
-        bot.reply_to(message, reply_part)
+        status.finish(reply_part + _fallback_note(response))
     except Exception as e:
-        bot.reply_to(message, f"Ошибка: {e}")
+        status.finish(f"Ошибка: {e}")
 
 
 def process_external_text(text):

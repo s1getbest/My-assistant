@@ -12,6 +12,22 @@ class FallbackResponse:
         self.text = text
 
 
+class GenerationResult:
+    """
+    Thin wrapper around whatever generate_content() got back (a real
+    genai response or a FallbackResponse), so every existing call site's
+    `response.text` keeps working unchanged, while new callers that care
+    (the Telegram progress-status UX) can also check `used_fallback` /
+    `attempts` to tell the user a key/model swap happened along the way.
+    """
+    def __init__(self, text, requested_model, model_used, attempts, used_fallback):
+        self.text = text
+        self.requested_model = requested_model
+        self.model_used = model_used
+        self.attempts = attempts
+        self.used_fallback = used_fallback
+
+
 class APIKeyManager:
     # How long a key that looks permanently invalid/unauthorized (not just
     # rate-limited) is excluded from rotation before we try it again. Long
@@ -100,10 +116,15 @@ class APIKeyManager:
             or str(getattr(error, "code", "")) == "503"
         )
 
-    def _safe_fallback_response(self, model):
-        if model == config.MODEL_LITE:
-            return FallbackResponse("Сервис ИИ временно перегружен. Попробуй еще раз через минуту.")
-        return FallbackResponse("")
+    def _safe_fallback_response(self, requested_model, current_model, attempts):
+        text = "Сервис ИИ временно перегружен. Попробуй еще раз через минуту." if current_model == config.MODEL_LITE else ""
+        return GenerationResult(
+            text=text,
+            requested_model=requested_model,
+            model_used=current_model,
+            attempts=attempts,
+            used_fallback=True,
+        )
 
     def generate_content(self, model, contents, **kwargs):
         current_model = model
@@ -118,7 +139,13 @@ class APIKeyManager:
                     contents=contents,
                     **kwargs
                 )
-                return response
+                return GenerationResult(
+                    text=getattr(response, "text", None),
+                    requested_model=model,
+                    model_used=current_model,
+                    attempts=attempt + 1,
+                    used_fallback=(attempt > 0 or current_model != model),
+                )
             except Exception as e:
                 last_error = e
                 err_msg = str(e)
@@ -146,10 +173,10 @@ class APIKeyManager:
                     continue
 
                 logger.error(f"[KeyManager] Direct API error (no rotation/no fallback): {err_msg}")
-                return self._safe_fallback_response(current_model)
+                return self._safe_fallback_response(model, current_model, attempt + 1)
 
         logger.error(f"[KeyManager] Exhausted retries. Last error: {last_error}")
-        return self._safe_fallback_response(current_model)
+        return self._safe_fallback_response(model, current_model, total_attempts)
 
 # Singleton key manager instance
 key_manager = APIKeyManager()

@@ -78,8 +78,14 @@ if not GEMINI_KEYS:
         logger.warning("[Config] Warning: No valid Gemini API keys found. Please set GEMINI_KEY_1 through GEMINI_KEY_N or GEMINI_API_KEY with valid keys starting with 'AIzaSy' or 'AQ.'")
 
 # === MODEL ROUTING CONSTANTS ===
-MODEL_COMPLEX = "gemini-3.5-flash"
-MODEL_LITE = "gemini-3.1-flash-lite"
+# Upgraded from gemini-3.5-flash / gemini-3.1-flash-lite (ARCHITECTURE.md
+# step 4) - with 5 Gemini keys in rotation there's ample free-tier quota
+# headroom (~50 RPM / 7500 RPD combined on 3.8-flash) for a single user,
+# so MODEL_COMPLEX is now used everywhere except the couple of
+# latency-sensitive spots that explicitly opt into MODEL_LITE (inline
+# quick-capture, the dashboard's welcome message / task suggestion).
+MODEL_COMPLEX = "gemini-3.8-flash"
+MODEL_LITE = "gemini-3.5-flash-lite"
 
 # === TIMEZONE ===
 msk_tz = pytz.timezone("Europe/Moscow")

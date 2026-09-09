@@ -160,17 +160,43 @@ def get_file_id_by_name(filename, folder_id=None):
         return None
 
 
-def read_file_from_drive(filename, bypass_cache=False):
+def get_folder_id(folder_name):
+    """
+    Returns the Drive folder ID for a top-level PARA folder (see
+    vault_files.ALL_FOLDERS), or None if folder mapping hasn't
+    initialized yet / that folder failed to create.
+    """
+    return _FOLDER_IDS.get(folder_name)
+
+
+def _cache_key(filename, folder_id):
+    # Filenames are only unique within a folder (e.g. a Media note and a
+    # Person note could coincidentally share a name) - keying the cache on
+    # (folder_id, filename) instead of just filename avoids one shadowing
+    # the other. folder_id is None for the common case (folder inferred
+    # from the filename itself, e.g. Tasks.md), which is fine since those
+    # filenames are already globally unique in the vault.
+    return f"{folder_id or ''}:{filename}"
+
+
+def read_file_from_drive(filename, bypass_cache=False, folder_id=None):
+    """
+    folder_id: explicit Drive folder ID to look in, overriding the normal
+    filename-based inference (_get_folder_for_file). Needed for freeform
+    entity notes (Media/People/Projects) whose filename is a user-chosen
+    name and can't be mapped to a folder by name alone.
+    """
+    cache_key = _cache_key(filename, folder_id)
     # Check cache first (unless bypassed)
     if not bypass_cache:
         with _CACHE_LOCK:
-            if filename in _FILE_CACHE and (time.time() - _CACHE_TIME.get(filename, 0) < 300):
-                return _FILE_CACHE[filename]
+            if cache_key in _FILE_CACHE and (time.time() - _CACHE_TIME.get(cache_key, 0) < 300):
+                return _FILE_CACHE[cache_key]
 
     last_err = None
     for attempt in range(3):
         try:
-            target_folder_id = _get_folder_for_file(filename)
+            target_folder_id = folder_id if folder_id is not None else _get_folder_for_file(filename)
             file_id = get_file_id_by_name(filename, folder_id=target_folder_id)
             if not file_id:
                 return ""
@@ -186,8 +212,8 @@ def read_file_from_drive(filename, bypass_cache=False):
 
             # Save to cache
             with _CACHE_LOCK:
-                _FILE_CACHE[filename] = content
-                _CACHE_TIME[filename] = time.time()
+                _FILE_CACHE[cache_key] = content
+                _CACHE_TIME[cache_key] = time.time()
 
             return content
         except Exception as e:
@@ -199,13 +225,17 @@ def read_file_from_drive(filename, bypass_cache=False):
     return ""
 
 
-def write_file_to_drive(filename, content):
+def write_file_to_drive(filename, content, folder_id=None):
+    """
+    folder_id: see read_file_from_drive - explicit override for freeform
+    entity notes that can't be routed by filename alone.
+    """
     last_err = None
     for attempt in range(3):
         try:
             service = get_drive_service()
-            folder_id = _get_folder_for_file(filename)
-            file_id = get_file_id_by_name(filename, folder_id)
+            target_folder_id = folder_id if folder_id is not None else _get_folder_for_file(filename)
+            file_id = get_file_id_by_name(filename, target_folder_id)
             media = MediaIoBaseUpload(
                 io.BytesIO(content.encode('utf-8')),
                 mimetype='text/markdown',
@@ -214,13 +244,14 @@ def write_file_to_drive(filename, content):
             if file_id:
                 service.files().update(fileId=file_id, media_body=media).execute()
             else:
-                file_metadata = {'name': filename, 'parents': [folder_id]}
+                file_metadata = {'name': filename, 'parents': [target_folder_id]}
                 service.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
             # Forcefully update cache upon successful write
+            cache_key = _cache_key(filename, folder_id)
             with _CACHE_LOCK:
-                _FILE_CACHE[filename] = content
-                _CACHE_TIME[filename] = time.time()
+                _FILE_CACHE[cache_key] = content
+                _CACHE_TIME[cache_key] = time.time()
             return
         except Exception as e:
             last_err = e
@@ -258,7 +289,7 @@ def write_json_to_drive(filename, data):
         return False
 
 
-def update_file_on_drive(filename, mutate_fn):
+def update_file_on_drive(filename, mutate_fn, folder_id=None):
     """
     Atomically read-modify-write a text file on Drive.
 
@@ -269,16 +300,21 @@ def update_file_on_drive(filename, mutate_fn):
     handler and the startup reminder-restore thread) cannot interleave and
     lose one of the updates.
 
+    folder_id: see read_file_from_drive - explicit override for freeform
+    entity notes. Note the lock is still keyed on `filename` alone (not
+    filename+folder_id) - two different entity types happening to pick the
+    same note name is an edge case not worth a bigger lock key for now.
+
     Returns the new content that was written, or None if aborted/failed.
     """
     lock = _get_file_lock(filename)
     with lock:
         try:
-            current = read_file_from_drive(filename, bypass_cache=True)
+            current = read_file_from_drive(filename, bypass_cache=True, folder_id=folder_id)
             new_content = mutate_fn(current)
             if new_content is None:
                 return None
-            write_file_to_drive(filename, new_content)
+            write_file_to_drive(filename, new_content, folder_id=folder_id)
             return new_content
         except Exception as e:
             logger.error(f"[Drive] update_file_on_drive failed for {filename}: {e}")

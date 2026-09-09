@@ -48,12 +48,8 @@ def _escape_drive_query_value(value):
     return (value or "").replace("\\", "\\\\").replace("'", "\\'")
 
 
-# === OBSIDIAN FOLDER MAPPING ===
-_FOLDER_IDS = {
-    "01-Daily": None,
-    "02-Brain": None,
-    "03-System": None
-}
+# === OBSIDIAN FOLDER MAPPING (PARA + Zettelkasten, see ARCHITECTURE.md) ===
+_FOLDER_IDS = {name: None for name in vault_files.ALL_FOLDERS}
 _FOLDER_LOCK = threading.Lock()
 
 
@@ -103,17 +99,19 @@ def _get_folder_for_file(filename):
     """
     Determine which folder a file should be stored in based on its name.
     """
-    # Daily files
     if filename in vault_files.DAILY_FILES:
-        return _FOLDER_IDS.get("01-Daily")
-    # Brain files (Zettelkasten notes)
-    if filename.endswith(".md") and filename not in vault_files.DAILY_FILES and filename not in (
-        vault_files.GOALS, vault_files.INBOX, vault_files.ICEBOX, vault_files.MEMORY
-    ):
-        return _FOLDER_IDS.get("02-Brain")
-    # System files
+        return _FOLDER_IDS.get(vault_files.FOLDER_DAILY)
+    if filename in vault_files.INBOX_FILES:
+        return _FOLDER_IDS.get(vault_files.FOLDER_INBOX)
+    if filename in vault_files.ARCHIVE_FILES:
+        return _FOLDER_IDS.get(vault_files.FOLDER_ARCHIVE)
     if filename in vault_files.SYSTEM_FILES:
-        return _FOLDER_IDS.get("03-System")
+        return _FOLDER_IDS.get(vault_files.FOLDER_SYSTEM)
+    # Freeform Zettelkasten notes created via the [NOTE] tag. Dedicated
+    # routing for Media/People/Project note types lands in
+    # ARCHITECTURE.md step 3 - until then everything else ends up here.
+    if filename.endswith(".md"):
+        return _FOLDER_IDS.get(vault_files.FOLDER_RESOURCES)
     # Default to main folder
     return config.FOLDER_ID
 

@@ -6,6 +6,8 @@ from functools import wraps
 from flask import Flask, request, jsonify, render_template, make_response
 import config
 import vault_files
+import university_schedule
+import vault_index
 from logging_config import get_logger
 
 from bot_instance import bot
@@ -232,6 +234,8 @@ def home():
     profile = {"xp": 0, "level": 1}
     welcome_msg = "Привет, Павел! Рад тебя видеть в Time OS 2.0."
     flashcard_stats = {"total": 0, "due": 0}
+    today_classes = []
+    brain_stats = {"people": 0, "projects": 0, "media": 0, "tags": 0}
 
     # Fetch with individual try-except blocks
     try:
@@ -289,6 +293,31 @@ def home():
         logger.error(f"[Dashboard] Error getting flashcard stats: {e}")
 
     try:
+        raw_classes = university_schedule.get_classes_for_date(datetime.now(config.msk_tz).date())
+        today_classes = [{"time": t, "subject": s} for t, s in raw_classes]
+    except Exception as e:
+        logger.error(f"[Dashboard] Error getting today's classes: {e}")
+        today_classes = []
+
+    try:
+        # Index.json only stores name/title + file path per entity (not
+        # status/rating - those live in the note's own frontmatter), so
+        # these are plain counts, not a "currently watching" breakdown -
+        # that would need reading every media note's frontmatter on every
+        # dashboard load, which doesn't scale with vault size for a stat
+        # tile.
+        index_data = vault_index.read_index()
+        brain_stats = {
+            "people": len(index_data.get("people", [])),
+            "projects": len(index_data.get("projects", [])),
+            "media": len(index_data.get("media", [])),
+            "tags": len(index_data.get("tags", [])),
+        }
+    except Exception as e:
+        logger.error(f"[Dashboard] Error getting brain index stats: {e}")
+        brain_stats = {"people": 0, "projects": 0, "media": 0, "tags": 0}
+
+    try:
         from key_manager import key_manager
         current_memory = read_file_from_drive(vault_files.MEMORY)
         if current_memory:
@@ -314,6 +343,8 @@ def home():
         welcome_msg=welcome_msg,
         profile=profile,
         flashcard_stats=flashcard_stats,
+        today_classes=today_classes,
+        brain_stats=brain_stats,
     )
 
 

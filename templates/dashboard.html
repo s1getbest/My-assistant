@@ -56,6 +56,29 @@
                 <p class="text-sm italic leading-relaxed text-indigo-200">"{{ welcome_msg }}"</p>
             </div>
 
+            <!-- Second Brain Stats Card -->
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🧠 Второй Мозг</h2>
+                <div class="grid grid-cols-4 gap-2">
+                    <div class="bg-slate-950/50 rounded-xl p-3 border border-slate-800 text-center">
+                        <p class="text-xl font-extrabold text-indigo-400">{{ brain_stats.people }}</p>
+                        <p class="text-[9px] text-slate-500 uppercase tracking-wide mt-0.5">👥 Люди</p>
+                    </div>
+                    <div class="bg-slate-950/50 rounded-xl p-3 border border-slate-800 text-center">
+                        <p class="text-xl font-extrabold text-purple-400">{{ brain_stats.media }}</p>
+                        <p class="text-[9px] text-slate-500 uppercase tracking-wide mt-0.5">🎬 Медиа</p>
+                    </div>
+                    <div class="bg-slate-950/50 rounded-xl p-3 border border-slate-800 text-center">
+                        <p class="text-xl font-extrabold text-amber-400">{{ brain_stats.projects }}</p>
+                        <p class="text-[9px] text-slate-500 uppercase tracking-wide mt-0.5">📁 Проекты</p>
+                    </div>
+                    <div class="bg-slate-950/50 rounded-xl p-3 border border-slate-800 text-center">
+                        <p class="text-xl font-extrabold text-emerald-400">{{ brain_stats.tags }}</p>
+                        <p class="text-[9px] text-slate-500 uppercase tracking-wide mt-0.5">🏷 Теги</p>
+                    </div>
+                </div>
+            </div>
+
             <!-- Habit Heatmap Card -->
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
                 <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🔥 Календарь привычек</h2>
@@ -145,6 +168,23 @@
 
         <!-- TAB 3: STUDY -->
         <div id="tab-study" class="tab-panel hidden">
+            <!-- Today's Classes Card -->
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">📅 Пары сегодня</h2>
+                {% if today_classes %}
+                <div class="space-y-2">
+                    {% for cls in today_classes %}
+                    <div class="flex items-center gap-3 bg-slate-950/60 rounded-xl p-3 border border-slate-800/80">
+                        <span class="text-[10px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded shrink-0">{{ cls.time }}</span>
+                        <span class="text-sm">{{ cls.subject }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-sm text-slate-500 text-center py-4">Сегодня пар нет 🎉 (или расписание ещё не задано — /update_schedule в боте)</p>
+                {% endif %}
+            </div>
+
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
                 <div class="flex items-center gap-2 mb-3">
                     <span class="text-lg">🎓</span>

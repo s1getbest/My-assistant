@@ -48,12 +48,8 @@ def _escape_drive_query_value(value):
     return (value or "").replace("\\", "\\\\").replace("'", "\\'")
 
 
-# === OBSIDIAN FOLDER MAPPING ===
-_FOLDER_IDS = {
-    "01-Daily": None,
-    "02-Brain": None,
-    "03-System": None
-}
+# === OBSIDIAN FOLDER MAPPING (PARA + Zettelkasten, see ARCHITECTURE.md) ===
+_FOLDER_IDS = {name: None for name in vault_files.ALL_FOLDERS}
 _FOLDER_LOCK = threading.Lock()
 
 
@@ -103,17 +99,21 @@ def _get_folder_for_file(filename):
     """
     Determine which folder a file should be stored in based on its name.
     """
-    # Daily files
     if filename in vault_files.DAILY_FILES:
-        return _FOLDER_IDS.get("01-Daily")
-    # Brain files (Zettelkasten notes)
-    if filename.endswith(".md") and filename not in vault_files.DAILY_FILES and filename not in (
-        vault_files.GOALS, vault_files.INBOX, vault_files.ICEBOX, vault_files.MEMORY
-    ):
-        return _FOLDER_IDS.get("02-Brain")
-    # System files
+        return _FOLDER_IDS.get(vault_files.FOLDER_DAILY)
+    if filename in vault_files.INBOX_FILES:
+        return _FOLDER_IDS.get(vault_files.FOLDER_INBOX)
+    if filename in vault_files.ARCHIVE_FILES:
+        return _FOLDER_IDS.get(vault_files.FOLDER_ARCHIVE)
     if filename in vault_files.SYSTEM_FILES:
-        return _FOLDER_IDS.get("03-System")
+        return _FOLDER_IDS.get(vault_files.FOLDER_SYSTEM)
+    if filename in vault_files.AREAS_FILES:
+        return _FOLDER_IDS.get(vault_files.FOLDER_AREAS)
+    # Freeform Zettelkasten notes created via the [NOTE] tag. Dedicated
+    # routing for Media/People/Project note types lands in
+    # ARCHITECTURE.md step 3 - until then everything else ends up here.
+    if filename.endswith(".md"):
+        return _FOLDER_IDS.get(vault_files.FOLDER_RESOURCES)
     # Default to main folder
     return config.FOLDER_ID
 
@@ -162,17 +162,43 @@ def get_file_id_by_name(filename, folder_id=None):
         return None
 
 
-def read_file_from_drive(filename, bypass_cache=False):
+def get_folder_id(folder_name):
+    """
+    Returns the Drive folder ID for a top-level PARA folder (see
+    vault_files.ALL_FOLDERS), or None if folder mapping hasn't
+    initialized yet / that folder failed to create.
+    """
+    return _FOLDER_IDS.get(folder_name)
+
+
+def _cache_key(filename, folder_id):
+    # Filenames are only unique within a folder (e.g. a Media note and a
+    # Person note could coincidentally share a name) - keying the cache on
+    # (folder_id, filename) instead of just filename avoids one shadowing
+    # the other. folder_id is None for the common case (folder inferred
+    # from the filename itself, e.g. Tasks.md), which is fine since those
+    # filenames are already globally unique in the vault.
+    return f"{folder_id or ''}:{filename}"
+
+
+def read_file_from_drive(filename, bypass_cache=False, folder_id=None):
+    """
+    folder_id: explicit Drive folder ID to look in, overriding the normal
+    filename-based inference (_get_folder_for_file). Needed for freeform
+    entity notes (Media/People/Projects) whose filename is a user-chosen
+    name and can't be mapped to a folder by name alone.
+    """
+    cache_key = _cache_key(filename, folder_id)
     # Check cache first (unless bypassed)
     if not bypass_cache:
         with _CACHE_LOCK:
-            if filename in _FILE_CACHE and (time.time() - _CACHE_TIME.get(filename, 0) < 300):
-                return _FILE_CACHE[filename]
+            if cache_key in _FILE_CACHE and (time.time() - _CACHE_TIME.get(cache_key, 0) < 300):
+                return _FILE_CACHE[cache_key]
 
     last_err = None
     for attempt in range(3):
         try:
-            target_folder_id = _get_folder_for_file(filename)
+            target_folder_id = folder_id if folder_id is not None else _get_folder_for_file(filename)
             file_id = get_file_id_by_name(filename, folder_id=target_folder_id)
             if not file_id:
                 return ""
@@ -188,8 +214,8 @@ def read_file_from_drive(filename, bypass_cache=False):
 
             # Save to cache
             with _CACHE_LOCK:
-                _FILE_CACHE[filename] = content
-                _CACHE_TIME[filename] = time.time()
+                _FILE_CACHE[cache_key] = content
+                _CACHE_TIME[cache_key] = time.time()
 
             return content
         except Exception as e:
@@ -201,13 +227,17 @@ def read_file_from_drive(filename, bypass_cache=False):
     return ""
 
 
-def write_file_to_drive(filename, content):
+def write_file_to_drive(filename, content, folder_id=None):
+    """
+    folder_id: see read_file_from_drive - explicit override for freeform
+    entity notes that can't be routed by filename alone.
+    """
     last_err = None
     for attempt in range(3):
         try:
             service = get_drive_service()
-            folder_id = _get_folder_for_file(filename)
-            file_id = get_file_id_by_name(filename, folder_id)
+            target_folder_id = folder_id if folder_id is not None else _get_folder_for_file(filename)
+            file_id = get_file_id_by_name(filename, target_folder_id)
             media = MediaIoBaseUpload(
                 io.BytesIO(content.encode('utf-8')),
                 mimetype='text/markdown',
@@ -216,13 +246,14 @@ def write_file_to_drive(filename, content):
             if file_id:
                 service.files().update(fileId=file_id, media_body=media).execute()
             else:
-                file_metadata = {'name': filename, 'parents': [folder_id]}
+                file_metadata = {'name': filename, 'parents': [target_folder_id]}
                 service.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
             # Forcefully update cache upon successful write
+            cache_key = _cache_key(filename, folder_id)
             with _CACHE_LOCK:
-                _FILE_CACHE[filename] = content
-                _CACHE_TIME[filename] = time.time()
+                _FILE_CACHE[cache_key] = content
+                _CACHE_TIME[cache_key] = time.time()
             return
         except Exception as e:
             last_err = e
@@ -260,7 +291,7 @@ def write_json_to_drive(filename, data):
         return False
 
 
-def update_file_on_drive(filename, mutate_fn):
+def update_file_on_drive(filename, mutate_fn, folder_id=None):
     """
     Atomically read-modify-write a text file on Drive.
 
@@ -271,16 +302,21 @@ def update_file_on_drive(filename, mutate_fn):
     handler and the startup reminder-restore thread) cannot interleave and
     lose one of the updates.
 
+    folder_id: see read_file_from_drive - explicit override for freeform
+    entity notes. Note the lock is still keyed on `filename` alone (not
+    filename+folder_id) - two different entity types happening to pick the
+    same note name is an edge case not worth a bigger lock key for now.
+
     Returns the new content that was written, or None if aborted/failed.
     """
     lock = _get_file_lock(filename)
     with lock:
         try:
-            current = read_file_from_drive(filename, bypass_cache=True)
+            current = read_file_from_drive(filename, bypass_cache=True, folder_id=folder_id)
             new_content = mutate_fn(current)
             if new_content is None:
                 return None
-            write_file_to_drive(filename, new_content)
+            write_file_to_drive(filename, new_content, folder_id=folder_id)
             return new_content
         except Exception as e:
             logger.error(f"[Drive] update_file_on_drive failed for {filename}: {e}")
@@ -433,12 +469,26 @@ def mark_task_done_by_token(task_token):
 
 
 def list_markdown_files(limit=10):
+    """
+    Lists the most recently modified .md files across the whole vault.
+
+    Bug fix: this used to only query files with config.FOLDER_ID (the
+    vault root) as a direct parent - but every markdown file lives inside
+    one of the PARA subfolders (01-Daily, 04-Resources, ...), never in the
+    root itself, so this returned nothing and /search was effectively
+    non-functional. Now queries across every known subfolder in one
+    request via Drive's boolean query syntax.
+    """
     try:
         service = get_drive_service()
-        query = (
-            f"'{config.FOLDER_ID}' in parents and trashed = false "
-            "and name contains '.md'"
-        )
+        folder_ids = [fid for fid in _FOLDER_IDS.values() if fid]
+        if not folder_ids:
+            # Folder mapping hasn't initialized yet (or every folder
+            # failed to create) - fall back to the root so this doesn't
+            # silently return nothing.
+            folder_ids = [config.FOLDER_ID]
+        parent_clause = " or ".join(f"'{fid}' in parents" for fid in folder_ids)
+        query = f"trashed = false and name contains '.md' and ({parent_clause})"
         results = service.files().list(
             q=query,
             spaces='drive',

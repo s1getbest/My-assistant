@@ -18,20 +18,29 @@ from uuid import uuid4
 
 import config
 import vault_files
+import note_templates
+import vault_index
 from logging_config import get_logger
 from drive_service import (
     append_line_to_drive,
     delete_line_from_task_file,
     edit_line_in_task_file,
+    update_file_on_drive,
     update_json_file_on_drive,
+    get_folder_id,
     add_user_xp,
 )
 
 logger = get_logger(__name__)
 
+# Maps a note_templates entity type to the plural key it's stored under in
+# Index.json (see vault_index.py).
+_ENTITY_INDEX_CATEGORY = {"media": "media", "person": "people", "project": "projects"}
+
 # === REGEX CONSTANTS ===
 TAG_LINE_RE = re.compile(
-    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|MEMORY|SCHEDULE|QUESTION|MOOD|INBOX|NOTE|CARD)\]\s*(.+)$',
+    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|MEMORY|SCHEDULE|QUESTION|MOOD|INBOX|NOTE|CARD'
+    r'|MEDIA|PERSON|PROJECT)\]\s*(.+)$',
     re.MULTILINE
 )
 
@@ -97,6 +106,9 @@ def get_extraction_rules(today_str):
 [NOTE] Category | Text с [[wikilinks]] и #tags
 [CARD] Question | Answer
 [QUESTION] Name: суть вопроса
+[MEDIA] Точное название | category | status | rating | впечатления
+[PERSON] Имя человека | relationship | что произошло/что запомнить
+[PROJECT] Название проекта | status | что произошло/цель
 
 Если пользователь просит удалить задачу, используй [TASK_DEL] и передай уникальный фрагмент текста для поиска.
 Если пользователь просит изменить задачу, используй [TASK_EDIT] в формате `старый_текст || новая_строка`.
@@ -104,6 +116,20 @@ def get_extraction_rules(today_str):
 Если пользователь просто выгружает мысли, идеи, наблюдения или факты без явного действия, используй [INBOX].
 Если это атомарная заметка для Второго Мозга, используй [NOTE] и автоматически оборачивай ключевые сущности, концепты и имена в [[wikilinks]], а также добавляй релевантные #tags.
 Если можно сформулировать учебную карточку вопрос-ответ, используй [CARD].
+
+Если сообщение про фильм/аниме/сериал/книгу/игру (посмотрел, смотрю, бросил, оценка), используй [MEDIA].
+  - category — ТОЛЬКО одно из: anime, movie, series, book, game.
+  - status — ТОЛЬКО одно из: planned, watching, watched, dropped.
+  - rating — число 1-10, если пользователь его называет, иначе оставь поле пустым (просто ничего не пиши между соседними "|").
+  - Название указывай максимально точно и одинаково при повторных упоминаниях того же тайтла - от этого зависит, обновится существующая карточка или случайно создастся вторая.
+
+Если сообщение про человека (новое знакомство, встреча, разговор, что-то важное о ком-то), используй [PERSON].
+  - relationship — ТОЛЬКО одно из: friend, family, colleague, acquaintance, romantic (выбери максимально подходящее по контексту, если непонятно - acquaintance).
+  - Имя указывай одинаково при повторных упоминаниях того же человека.
+
+Если сообщение про учебный/личный проект с целью или дедлайном (не разовая задача, а что-то более крупное), используй [PROJECT].
+  - status — ТОЛЬКО одно из: active, paused, done.
+  - Название проекта указывай одинаково при повторных упоминаниях.
 
 ВАЖНО: При сохранении Zettelkasten заметки, выводи [NOTE] Category | Rich text с [[wikilinks]] и #tags.
 Затем выводи ответ пользователю в [ОТВЕТ]. Текст в [ОТВЕТ] ДОЛЖЕН БЫТЬ ЧИСТЫМ. НЕ ставь НИКАКИХ [[wikilinks]], #tags или **bold** в секции [ОТВЕТ]. Просто напиши что-то естественное вроде "Я записал этот факт в базу знаний".
@@ -117,6 +143,10 @@ def get_extraction_rules(today_str):
 - "идея: сделать метод для сравнения привычек" → [INBOX] идея: сделать метод для сравнения привычек
 - "концепт atomic habits помогает строить систему" → [NOTE] Productivity | [[Atomic Habits]] помогает строить систему #productivity #habits
 - "что такое Zettelkasten? | система связанных атомарных заметок" → [CARD] Что такое Zettelkasten? | Система связанных атомарных заметок
+- "посмотрел атаку титанов, очень понравилось, 9 из 10" → [MEDIA] Атака Титанов | anime | watched | 9 | Очень понравилось
+- "начал смотреть Во все тяжкие" → [MEDIA] Во все тяжкие | series | watching | | Только начал смотреть
+- "познакомился сегодня с Иваном на дне рождения у Маши" → [PERSON] Иван | acquaintance | Познакомились на дне рождения у Маши
+- "начал делать диплом про нейросети, дедлайн в июне" → [PROJECT] Диплом | active | Тема: нейросети, дедлайн июнь
 """
 
 
@@ -135,6 +165,79 @@ def extract_task_text_from_line(task_line):
     if "|" in stripped:
         return stripped.split("|", 1)[1].strip().replace("⏰ REMINDER:", "", 1).strip()
     return stripped.replace("⏰ REMINDER:", "", 1).strip()
+
+
+def save_entity_note(entity_type, name, extra_fields, body):
+    """
+    Create or update a Media/Person/Project note (ARCHITECTURE.md step 3).
+
+    Looks up `name` in Index.json (case-insensitive exact match): if found,
+    merges `extra_fields` into the existing note's frontmatter and appends
+    a new dated entry to the body; if not found, creates a new note (with
+    a "# {name}" heading, for readability when opened directly in
+    Obsidian) in the entity's PARA folder and registers it in Index.json.
+
+    The body is append-only for every entity type, never overwritten:
+    this is meant to be a "second brain that doesn't forget" (per the
+    product goal it was built for), so a later, shorter mention shouldn't
+    erase earlier impressions/details - e.g. re-watching a show and
+    leaving a two-word comment shouldn't wipe out a paragraph of earlier
+    thoughts about it. Frontmatter *fields* (status/rating/...) are the
+    exception - those represent current state and are meant to be
+    overwritten with the latest value.
+
+    `extra_fields` values are validated against note_templates.FIELD_ENUMS
+    where applicable - an out-of-vocabulary value is dropped (keeping
+    whatever was there before, or leaving the field unset) rather than
+    letting the vault's tag/status vocabulary drift.
+    """
+    name = (name or "").strip()
+    if not name or not note_templates.is_known_type(entity_type):
+        return None
+
+    index_category = _ENTITY_INDEX_CATEGORY[entity_type]
+    folder_name = note_templates.folder_for_type(entity_type)
+    folder_id = get_folder_id(folder_name)
+    existing = vault_index.find_entity(index_category, name)
+    if existing:
+        # Reuse the exact filename Index.json already has for this entity,
+        # even if this mention's name differs in case/spacing from the
+        # first one (e.g. "атака титанов" vs "Атака Титанов") - otherwise
+        # we'd silently create a second file instead of updating the first.
+        filename = existing["file"].split("/")[-1]
+    else:
+        filename = f"{sanitize_note_category(name)}.md"
+
+    def mutate(current_content):
+        if current_content.strip():
+            fields, old_body = note_templates.parse_note(current_content)
+        else:
+            fields, old_body = {}, f"# {name}"
+
+        for key, value in (extra_fields or {}).items():
+            value = (value or "").strip()
+            if not value:
+                continue
+            allowed = note_templates.FIELD_ENUMS.get(f"{entity_type}.{key}")
+            if allowed and value.lower() not in allowed:
+                logger.warning(f"[Entity] Dropping out-of-vocabulary {entity_type}.{key}={value!r}")
+                continue
+            fields[key] = value.lower() if allowed else value
+        fields["type"] = entity_type
+
+        body_text = (body or "").strip()
+        if body_text:
+            today = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+            new_body = f"{old_body}\n\n{today}: {body_text}".strip()
+        else:
+            new_body = old_body
+
+        return note_templates.render_note(fields, new_body)
+
+    update_file_on_drive(filename, mutate, folder_id=folder_id)
+
+    if existing is None:
+        vault_index.upsert_entity(index_category, name, f"{folder_name}/{filename}")
 
 
 def _append_flashcard(question, answer):
@@ -180,11 +283,27 @@ def apply_gemini_tags(tags):
             elif tag_type == "NOTE" and "|" in payload:
                 category, note_text = payload.split("|", 1)
                 note_filename = f"{sanitize_note_category(category)}.md"
-                # Note files are automatically routed to 02-Brain folder by drive_service
+                # Note files are automatically routed to the 04-Resources folder by drive_service
                 append_line_to_drive(note_filename, f"* {note_text.strip()}")
             elif tag_type == "CARD" and "|" in payload:
                 question, answer = payload.split("|", 1)
                 _append_flashcard(question, answer)
+            elif tag_type == "MEDIA" and payload.count("|") >= 3:
+                parts = [p.strip() for p in payload.split("|", 4)]
+                title, category, status = parts[0], parts[1], parts[2]
+                rating = parts[3] if len(parts) > 3 else ""
+                body = parts[4] if len(parts) > 4 else ""
+                save_entity_note("media", title, {"category": category, "status": status, "rating": rating}, body)
+            elif tag_type == "PERSON" and "|" in payload:
+                parts = [p.strip() for p in payload.split("|", 2)]
+                name, relationship = parts[0], parts[1] if len(parts) > 1 else ""
+                body = parts[2] if len(parts) > 2 else ""
+                save_entity_note("person", name, {"relationship": relationship}, body)
+            elif tag_type == "PROJECT" and "|" in payload:
+                parts = [p.strip() for p in payload.split("|", 2)]
+                name, status = parts[0], parts[1] if len(parts) > 1 else ""
+                body = parts[2] if len(parts) > 2 else ""
+                save_entity_note("project", name, {"status": status}, body)
             elif tag_type == "MOOD":
                 today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
                 append_line_to_drive(vault_files.HEALTH, f"* {today_str}: Mood {payload}")

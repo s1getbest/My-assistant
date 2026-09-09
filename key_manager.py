@@ -2,6 +2,9 @@ import threading
 import time
 from google import genai
 import config
+from logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class FallbackResponse:
@@ -14,7 +17,7 @@ class APIKeyManager:
         self.lock = threading.Lock()
         self._keys = config.GEMINI_KEYS
         self._current_index = 0
-        print(f"[KeyManager] Initialized with {len(self._keys)} API keys from dynamic pool")
+        logger.info(f"[KeyManager] Initialized with {len(self._keys)} API keys from dynamic pool")
 
     def get_client(self):
         """
@@ -30,7 +33,7 @@ class APIKeyManager:
         with self.lock:
             if self._keys:
                 self._current_index = (self._current_index + 1) % len(self._keys)
-                print(f"[KeyManager] Rotated to key index: {self._current_index}")
+                logger.info(f"[KeyManager] Rotated to key index: {self._current_index}")
 
     def _is_rate_limit_error(self, err_msg, error):
         return (
@@ -75,25 +78,25 @@ class APIKeyManager:
                 err_msg = str(e)
 
                 if self._is_rate_limit_error(err_msg, e):
-                    print(f"[KeyManager] 429 detected on attempt {attempt + 1}/{total_attempts}. Rotating key.")
+                    logger.warning(f"[KeyManager] 429 detected on attempt {attempt + 1}/{total_attempts}. Rotating key.")
                     self.rotate_key()
                     continue
 
                 if self._is_high_demand_error(err_msg, e):
-                    print(f"[KeyManager] 503/high demand detected. Falling back to {config.MODEL_LITE}.")
+                    logger.warning(f"[KeyManager] 503/high demand detected. Falling back to {config.MODEL_LITE}.")
                     current_model = config.MODEL_LITE
                     time.sleep(1)
                     continue
 
                 if str(getattr(e, "status_code", "")).startswith("5") or str(getattr(e, "code", "")).startswith("5"):
-                    print(f"[KeyManager] Server-side Gemini error. Retrying with {current_model}.")
+                    logger.warning(f"[KeyManager] Server-side Gemini error. Retrying with {current_model}.")
                     time.sleep(1)
                     continue
 
-                print(f"[KeyManager] Direct API error (no rotation/no fallback): {err_msg}")
+                logger.error(f"[KeyManager] Direct API error (no rotation/no fallback): {err_msg}")
                 return self._safe_fallback_response(current_model)
 
-        print(f"[KeyManager] Exhausted retries. Last error: {last_error}")
+        logger.error(f"[KeyManager] Exhausted retries. Last error: {last_error}")
         return self._safe_fallback_response(current_model)
 
 # Singleton key manager instance

@@ -469,12 +469,26 @@ def mark_task_done_by_token(task_token):
 
 
 def list_markdown_files(limit=10):
+    """
+    Lists the most recently modified .md files across the whole vault.
+
+    Bug fix: this used to only query files with config.FOLDER_ID (the
+    vault root) as a direct parent - but every markdown file lives inside
+    one of the PARA subfolders (01-Daily, 04-Resources, ...), never in the
+    root itself, so this returned nothing and /search was effectively
+    non-functional. Now queries across every known subfolder in one
+    request via Drive's boolean query syntax.
+    """
     try:
         service = get_drive_service()
-        query = (
-            f"'{config.FOLDER_ID}' in parents and trashed = false "
-            "and name contains '.md'"
-        )
+        folder_ids = [fid for fid in _FOLDER_IDS.values() if fid]
+        if not folder_ids:
+            # Folder mapping hasn't initialized yet (or every folder
+            # failed to create) - fall back to the root so this doesn't
+            # silently return nothing.
+            folder_ids = [config.FOLDER_ID]
+        parent_clause = " or ".join(f"'{fid}' in parents" for fid in folder_ids)
+        query = f"trashed = false and name contains '.md' and ({parent_clause})"
         results = service.files().list(
             q=query,
             spaces='drive',

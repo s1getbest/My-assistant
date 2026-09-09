@@ -7,6 +7,7 @@ import threading
 import config
 import vault_files
 import university_schedule
+import vault_index
 from bot_instance import bot
 from key_manager import key_manager
 from logging_config import get_logger
@@ -789,6 +790,18 @@ def handle_brain_search(message):
         memory = read_file_from_drive(vault_files.MEMORY)
         goals = read_file_from_drive(vault_files.GOALS)
 
+        # Compact Index.json summary so /brain also knows about
+        # Media/People/Project entities (ARCHITECTURE.md step 3) - their
+        # full note bodies aren't included here (would blow up context
+        # fast with many entities), just names/titles/tags, so the model
+        # can answer "who/what do I have" questions and point to /search
+        # for full details on a specific one.
+        index_data = vault_index.read_index()
+        people_list = ", ".join(p.get("name", "?") for p in index_data.get("people", [])) or "нет"
+        projects_list = ", ".join(p.get("name", "?") for p in index_data.get("projects", [])) or "нет"
+        media_list = ", ".join(m.get("title", "?") for m in index_data.get("media", [])) or "нет"
+        tags_list = ", ".join(index_data.get("tags", [])) or "нет"
+
         # Combine into context, safely truncating each to prevent context limit issues (e.g. max 4000 chars each)
         def truncate_context(text, max_chars=4000):
             if len(text) > max_chars:
@@ -809,12 +822,20 @@ def handle_brain_search(message):
 
 [ФАЙЛ Memory.md]
 {truncate_context(memory)}
+
+[ИНДЕКС ВТОРОГО МОЗГА - только имена/названия, не полное содержимое заметок]
+Люди: {people_list}
+Проекты: {projects_list}
+Медиа (фильмы/аниме/книги/игры): {media_list}
+Теги: {tags_list}
 """
 
         prompt = apply_format_rule(f"""Ты — ИИ-система "Второй Мозг" пользователя Павла. Твоя задача — проанализировать все файлы его личной базы знаний (Obsidian) и дать развернутый, глубокий и точный ответ на его вопрос.
 Текущее время: {datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")}
 
 Вопрос пользователя: "{query}"
+
+Раздел [ИНДЕКС ВТОРОГО МОЗГА] содержит только список имён/названий (люди, проекты, медиа, теги), БЕЗ полного текста их заметок - если вопрос требует деталей по конкретному человеку/проекту/тайтлу, а не просто списка, честно скажи, что для подробностей нужно спросить `/search <имя>`.
 
 Контекст его базы знаний (файлы из Google Drive):
 ---

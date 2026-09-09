@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 import config
 import vault_files
+import university_schedule
 from bot_instance import bot
 from key_manager import key_manager
 from logging_config import get_logger
@@ -482,7 +483,51 @@ Write a comprehensive, professional, yet warm and inspiring Markdown report. Del
         logger.error(f"[Scheduler] Error generating weekly audit: {e}")
 
 
+def inject_todays_classes():
+    """
+    Daily job (ARCHITECTURE.md step 6): looks up today's classes in
+    Расписание.md (by day-of-week + week parity, computed deterministically
+    - not AI-parsed) and adds any missing ones to Tasks.md as todo items.
+
+    Idempotent by design: safe to run more than once for the same day
+    (e.g. after a mid-day restart) - a class already present (matched by
+    today's date + subject + the 🎓 marker) is not added again.
+    """
+    try:
+        today = datetime.now(config.msk_tz).date()
+        classes = university_schedule.get_classes_for_date(today)
+        if not classes:
+            logger.info("[Scheduler] No classes scheduled for today.")
+            return
+
+        today_str = today.strftime("%Y-%m-%d")
+        added_count = {"n": 0}
+
+        def mutate(content):
+            lines = content.split("\n") if content.strip() else []
+            new_lines = []
+            for time_str, subject in classes:
+                already_present = any(
+                    today_str in existing_line and subject in existing_line and "🎓" in existing_line
+                    for existing_line in lines
+                )
+                if already_present:
+                    continue
+                new_lines.append(f"* [ ] {today_str} {time_str} | 🎓 {subject}")
+                added_count["n"] += 1
+            if not new_lines:
+                return None
+            return "\n".join(lines + new_lines) if lines else "\n".join(new_lines)
+
+        update_file_on_drive(vault_files.TASKS, mutate)
+        if added_count["n"]:
+            logger.info(f"[Scheduler] Added {added_count['n']} class(es) from Расписание.md to today's Tasks.md.")
+    except Exception as e:
+        logger.error(f"[Scheduler] Error injecting today's classes: {e}")
+
+
 # Register scheduled cron jobs
+scheduler.add_job(inject_todays_classes, 'cron', hour=5, minute=55)
 scheduler.add_job(morning_briefing, 'cron', hour=6, minute=0)
 scheduler.add_job(check_daily_sleep, 'cron', hour=10, minute=0)
 scheduler.add_job(evening_planning_reminder, 'cron', hour=20, minute=0)

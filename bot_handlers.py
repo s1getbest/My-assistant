@@ -6,6 +6,7 @@ from uuid import uuid4
 import threading
 import config
 import vault_files
+import university_schedule
 from bot_instance import bot
 from key_manager import key_manager
 from logging_config import get_logger
@@ -664,6 +665,49 @@ def handle_srs_review(call):
     except Exception as e:
         logger.error(f"[Quiz Callback] Error handling SRS: {e}")
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
+
+
+@bot.message_handler(commands=['update_schedule'])
+def handle_update_schedule(message):
+    """
+    Overwrites Расписание.md with the text that follows the command (or
+    the message it's a reply to). No AI parsing involved on purpose - see
+    university_schedule.py's module docstring for the expected format and
+    why a strict, code-parseable format was chosen over freeform recognition.
+    """
+    if not is_me(message):
+        return
+    try:
+        args = message.text.split(maxsplit=1)
+        raw_text = args[1].strip() if len(args) > 1 else ""
+        if not raw_text and message.reply_to_message:
+            raw_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+
+        if not raw_text:
+            bot.reply_to(
+                message,
+                "Пришли текст расписания после команды `/update_schedule` (или ответь ею на "
+                "сообщение с текстом расписания). Формат:\n\n"
+                "```\n## Нечётная\nПн: 09:00 Предмет; 10:40 Предмет2\nВт: 12:20 Предмет3\n\n"
+                "## Чётная\nПн: 09:00 Предмет4\n```",
+                parse_mode="Markdown",
+            )
+            return
+
+        university_schedule.save_schedule(raw_text)
+        sections = university_schedule.split_sections(raw_text)
+        if not sections:
+            bot.reply_to(
+                message,
+                "⚠️ Расписание сохранено, но не нашёл ни одного раздела \"## Нечётная\"/\"## Чётная\" - "
+                "проверь формат, иначе пары не будут автоматически попадать в Tasks.md."
+            )
+            return
+
+        found = ", ".join("нечётная" if p == "odd" else "чётная" for p in sections)
+        bot.reply_to(message, f"📅 Расписание обновлено. Найдены разделы: {found}.")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка обновления расписания: {e}")
 
 
 @bot.message_handler(commands=['journal'])

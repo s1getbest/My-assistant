@@ -107,6 +107,8 @@ def _get_folder_for_file(filename):
         return _FOLDER_IDS.get(vault_files.FOLDER_ARCHIVE)
     if filename in vault_files.SYSTEM_FILES:
         return _FOLDER_IDS.get(vault_files.FOLDER_SYSTEM)
+    if filename in vault_files.AREAS_FILES:
+        return _FOLDER_IDS.get(vault_files.FOLDER_AREAS)
     # Freeform Zettelkasten notes created via the [NOTE] tag. Dedicated
     # routing for Media/People/Project note types lands in
     # ARCHITECTURE.md step 3 - until then everything else ends up here.

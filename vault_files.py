@@ -31,6 +31,7 @@ QUESTIONS = "Questions.md"
 FLASHCARDS = "Flashcards.json"
 PROFILE = "Profile.json"
 INDEX = "Index.json"  # entity/tag index - see ARCHITECTURE.md step 2, not populated yet
+SCHEDULE = "Расписание.md"  # university weekly schedule - see university_schedule.py / ARCHITECTURE.md step 6
 
 # === FOLDER NAMES (top-level, under config.FOLDER_ID) ===
 FOLDER_INBOX = "00-Inbox"
@@ -67,3 +68,10 @@ ARCHIVE_FILES = (ICEBOX,)
 
 # Files that live in "08-System".
 SYSTEM_FILES = (FLASHCARDS, PROFILE, GOALS, MEMORY, INDEX)
+
+# Files that live in "03-Areas". ARCHITECTURE.md originally sketched
+# Расписание.md as living in a nested "03-Areas/Учёба/" subfolder, but
+# _get_or_create_folder only creates folders directly under config.FOLDER_ID
+# (no nested-folder support yet) - simplified to live directly in 03-Areas
+# for this one file rather than building nested-folder creation for it.
+AREAS_FILES = (SCHEDULE,)

@@ -145,6 +145,23 @@
 
         <!-- TAB 3: STUDY -->
         <div id="tab-study" class="tab-panel hidden">
+            <!-- Today's Classes Card -->
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">📅 Пары сегодня</h2>
+                {% if today_classes %}
+                <div class="space-y-2">
+                    {% for cls in today_classes %}
+                    <div class="flex items-center gap-3 bg-slate-950/60 rounded-xl p-3 border border-slate-800/80">
+                        <span class="text-[10px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded shrink-0">{{ cls.time }}</span>
+                        <span class="text-sm">{{ cls.subject }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-sm text-slate-500 text-center py-4">Сегодня пар нет 🎉 (или расписание ещё не задано — /update_schedule в боте)</p>
+                {% endif %}
+            </div>
+
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
                 <div class="flex items-center gap-2 mb-3">
                     <span class="text-lg">🎓</span>

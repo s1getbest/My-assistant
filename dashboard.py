@@ -6,6 +6,7 @@ from functools import wraps
 from flask import Flask, request, jsonify, render_template, make_response
 import config
 import vault_files
+import university_schedule
 from logging_config import get_logger
 
 from bot_instance import bot
@@ -232,6 +233,7 @@ def home():
     profile = {"xp": 0, "level": 1}
     welcome_msg = "Привет, Павел! Рад тебя видеть в Time OS 2.0."
     flashcard_stats = {"total": 0, "due": 0}
+    today_classes = []
 
     # Fetch with individual try-except blocks
     try:
@@ -289,6 +291,13 @@ def home():
         logger.error(f"[Dashboard] Error getting flashcard stats: {e}")
 
     try:
+        raw_classes = university_schedule.get_classes_for_date(datetime.now(config.msk_tz).date())
+        today_classes = [{"time": t, "subject": s} for t, s in raw_classes]
+    except Exception as e:
+        logger.error(f"[Dashboard] Error getting today's classes: {e}")
+        today_classes = []
+
+    try:
         from key_manager import key_manager
         current_memory = read_file_from_drive(vault_files.MEMORY)
         if current_memory:
@@ -314,6 +323,7 @@ def home():
         welcome_msg=welcome_msg,
         profile=profile,
         flashcard_stats=flashcard_stats,
+        today_classes=today_classes,
     )
 
 

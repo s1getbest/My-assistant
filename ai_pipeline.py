@@ -172,11 +172,19 @@ def save_entity_note(entity_type, name, extra_fields, body):
     Create or update a Media/Person/Project note (ARCHITECTURE.md step 3).
 
     Looks up `name` in Index.json (case-insensitive exact match): if found,
-    merges `extra_fields` into the existing note's frontmatter and updates
-    the body in place (Person notes are append-only - each call adds a new
-    dated entry rather than overwriting what's already there); if not
-    found, creates a new note in the entity's PARA folder and registers it
-    in Index.json.
+    merges `extra_fields` into the existing note's frontmatter and appends
+    a new dated entry to the body; if not found, creates a new note (with
+    a "# {name}" heading, for readability when opened directly in
+    Obsidian) in the entity's PARA folder and registers it in Index.json.
+
+    The body is append-only for every entity type, never overwritten:
+    this is meant to be a "second brain that doesn't forget" (per the
+    product goal it was built for), so a later, shorter mention shouldn't
+    erase earlier impressions/details - e.g. re-watching a show and
+    leaving a two-word comment shouldn't wipe out a paragraph of earlier
+    thoughts about it. Frontmatter *fields* (status/rating/...) are the
+    exception - those represent current state and are meant to be
+    overwritten with the latest value.
 
     `extra_fields` values are validated against note_templates.FIELD_ENUMS
     where applicable - an out-of-vocabulary value is dropped (keeping
@@ -204,7 +212,7 @@ def save_entity_note(entity_type, name, extra_fields, body):
         if current_content.strip():
             fields, old_body = note_templates.parse_note(current_content)
         else:
-            fields, old_body = {}, ""
+            fields, old_body = {}, f"# {name}"
 
         for key, value in (extra_fields or {}).items():
             value = (value or "").strip()
@@ -218,13 +226,11 @@ def save_entity_note(entity_type, name, extra_fields, body):
         fields["type"] = entity_type
 
         body_text = (body or "").strip()
-        if entity_type == "person":
-            # People notes grow over time - never overwrite past entries.
+        if body_text:
             today = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
-            new_entry = f"{today}: {body_text}" if body_text else None
-            new_body = f"{old_body}\n\n{new_entry}".strip() if new_entry else old_body
+            new_body = f"{old_body}\n\n{today}: {body_text}".strip()
         else:
-            new_body = body_text or old_body
+            new_body = old_body
 
         return note_templates.render_note(fields, new_body)
 

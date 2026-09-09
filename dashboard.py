@@ -2,8 +2,11 @@ import hmac
 import hashlib
 import urllib.parse
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, render_template
+from functools import wraps
+from flask import Flask, request, jsonify, render_template, make_response
 import config
+import vault_files
+from logging_config import get_logger
 
 from bot_instance import bot
 import telebot
@@ -11,8 +14,8 @@ from drive_service import (
     append_line_to_drive,
     read_file_from_drive,
     read_json_from_drive,
-    write_file_to_drive,
-    write_json_to_drive,
+    update_file_on_drive,
+    update_json_file_on_drive,
     get_today_tasks,
     get_sleep_chart_data,
     get_habit_completion_array,
@@ -21,19 +24,26 @@ from drive_service import (
     initialize_folder_mapping,
 )
 
+logger = get_logger(__name__)
+
 # Initialize Flask Mini App
 app = Flask(__name__)
 
 # Initialize folder mapping on startup
 try:
     initialize_folder_mapping()
-    print("[Dashboard] Folder mapping initialized.")
+    logger.info("[Dashboard] Folder mapping initialized.")
 except Exception as e:
-    print(f"[Dashboard] Warning: Failed to initialize folder mapping: {e}")
+    logger.error(f"[Dashboard] Warning: Failed to initialize folder mapping: {e}")
+
+DASHBOARD_COOKIE_NAME = "dashboard_key"
+DASHBOARD_COOKIE_MAX_AGE = 180 * 24 * 60 * 60  # ~180 days
 
 
 def validate_telegram_data(init_data):
     if not init_data:
+        return False
+    if not config.TELEGRAM_TOKEN:
         return False
     try:
         vals = {
@@ -51,9 +61,61 @@ def validate_telegram_data(init_data):
             hashlib.sha256
         ).digest()
         h = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256)
-        return h.hexdigest() == vals['hash']
+        # Constant-time comparison: a plain `==` on hex digests is vulnerable
+        # to a (largely theoretical, but free to avoid) timing attack.
+        return hmac.compare_digest(h.hexdigest(), vals['hash'])
     except Exception:
         return False
+
+
+def _dashboard_key_is_valid(candidate):
+    if not candidate or not config.DASHBOARD_ACCESS_KEY:
+        return False
+    return hmac.compare_digest(candidate, config.DASHBOARD_ACCESS_KEY)
+
+
+def require_dashboard_key(view_func):
+    """
+    Guards the personal dashboard ('/'), which otherwise renders tasks,
+    sleep/health data, XP and a snippet of Memory.md for anyone who knows the
+    Render URL, with no authentication at all.
+
+    Access is granted by a `?key=<DASHBOARD_ACCESS_KEY>` query parameter
+    (meant to be embedded once in the bot's menu-button / Mini App URL); on
+    success a long-lived cookie is set so the page keeps working afterwards
+    without the key in the URL (e.g. reopening it from the home screen).
+    If DASHBOARD_ACCESS_KEY is not configured on the server, access is
+    denied entirely (fail closed) rather than left open.
+    """
+    @wraps(view_func)
+    def wrapper(*args, **kwargs):
+        if not config.DASHBOARD_ACCESS_KEY:
+            return jsonify({
+                "success": False,
+                "error": "Dashboard is not configured. Set DASHBOARD_ACCESS_KEY on the server."
+            }), 503
+
+        query_key = request.args.get("key")
+        cookie_key = request.cookies.get(DASHBOARD_COOKIE_NAME)
+
+        if _dashboard_key_is_valid(query_key):
+            response = make_response(view_func(*args, **kwargs))
+            response.set_cookie(
+                DASHBOARD_COOKIE_NAME,
+                query_key,
+                max_age=DASHBOARD_COOKIE_MAX_AGE,
+                httponly=True,
+                secure=True,
+                samesite="Lax",
+            )
+            return response
+
+        if _dashboard_key_is_valid(cookie_key):
+            return view_func(*args, **kwargs)
+
+        return jsonify({"success": False, "error": "Unauthorized"}), 403
+
+    return wrapper
 
 
 @app.route('/api/done', methods=['POST'])
@@ -68,21 +130,39 @@ def mark_task_done():
         if task_idx is None:
             return jsonify({"success": False, "error": "task_idx required"}), 400
 
-        content = read_file_from_drive("Tasks.md")
-        lines = content.split("\n")
-        unchecked_count = 0
-        for i, line in enumerate(lines):
-            if "[ ]" not in line:
-                continue
-            if unchecked_count == int(task_idx):
-                lines[i] = line.replace("[ ]", "[x]", 1)
-                write_file_to_drive("Tasks.md", "\n".join(lines))
-                # RPG Gamification: Add +10 XP for task completion
-                add_user_xp(10)
-                return jsonify({"success": True})
-            unchecked_count += 1
-        return jsonify({"success": False, "error": "Task not found"}), 404
+        try:
+            target_idx = int(task_idx)
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "task_idx must be an integer"}), 400
+
+        def mutate(content):
+            lines = content.split("\n")
+            unchecked_count = 0
+            for i, line in enumerate(lines):
+                if "[ ]" not in line:
+                    continue
+                if unchecked_count == target_idx:
+                    lines[i] = line.replace("[ ]", "[x]", 1)
+                    return "\n".join(lines)
+                unchecked_count += 1
+            return None
+
+        # update_file_on_drive serializes this read-modify-write against any
+        # other concurrent writer of Tasks.md (e.g. a Telegram message being
+        # processed at the same time), preventing a lost update. Its return
+        # value is None both when the task wasn't found and when the Drive
+        # write itself failed after mutate() ran, so either way we must not
+        # award XP for a change that wasn't actually persisted.
+        result = update_file_on_drive(vault_files.TASKS, mutate)
+
+        if result is None:
+            return jsonify({"success": False, "error": "Task not found"}), 404
+
+        # RPG Gamification: Add +10 XP for task completion
+        add_user_xp(10)
+        return jsonify({"success": True})
     except Exception as e:
+        logger.error(f"[Dashboard] mark_task_done error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -111,15 +191,14 @@ def get_focus_task():
         if not validate_telegram_data(init_data):
             return jsonify({"success": False, "error": "Unauthorized"}), 403
 
-        from drive_service import get_today_tasks
         today_tasks = get_today_tasks()
         open_tasks = [t for t in today_tasks if not t.get("done")]
-        
+
         if not open_tasks:
             return jsonify({"success": True, "task": "Нет открытых задач на сегодня! Отдыхайте 🎉"})
-            
+
         tasks_text = "\n".join([f"- {t.get('time', '—')} | {t.get('text')}" for t in open_tasks])
-        
+
         prompt = f"""The user has 30 minutes of free time right now. Pick exactly ONE task from this list that they should do immediately. Return ONLY the task text (do not include time, bullet points, intro, or any conversational text).
 
 Tasks list:
@@ -130,13 +209,17 @@ Tasks list:
             model=config.MODEL_LITE,
             contents=prompt
         )
-        task_recommendation = response.text.strip()
+        task_recommendation = (response.text or "").strip()
+        if not task_recommendation:
+            return jsonify({"success": False, "error": "AI service temporarily unavailable"}), 503
         return jsonify({"success": True, "task": task_recommendation})
     except Exception as e:
+        logger.error(f"[Dashboard] get_focus_task error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/')
+@require_dashboard_key
 def home():
     today_label = datetime.now(config.msk_tz).strftime("%d.%m.%Y")
 
@@ -154,13 +237,13 @@ def home():
     try:
         today_tasks = get_today_tasks()
     except Exception as e:
-        print(f"[Dashboard] Error getting today tasks: {e}")
+        logger.error(f"[Dashboard] Error getting today tasks: {e}")
         today_tasks = []
 
     try:
         sleep_data, sleep_labels, last_sleep = get_sleep_chart_data()
     except Exception as e:
-        print(f"[Dashboard] Error getting sleep data: {e}")
+        logger.error(f"[Dashboard] Error getting sleep data: {e}")
         sleep_data, sleep_labels, last_sleep = [0], ["No data"], "—"
 
     try:
@@ -168,7 +251,7 @@ def home():
         if not habit_data:
             raise ValueError("Empty habit completion array")
     except Exception as e:
-        print(f"[Dashboard] Error getting habit completion array: {e}")
+        logger.error(f"[Dashboard] Error getting habit completion array: {e}")
         habit_data = []
         today = datetime.now(config.msk_tz)
         for i in range(13, -1, -1):
@@ -186,11 +269,11 @@ def home():
         if not profile or not isinstance(profile, dict):
             profile = {"xp": 0, "level": 1}
     except Exception as e:
-        print(f"[Dashboard] Error getting user profile: {e}")
+        logger.error(f"[Dashboard] Error getting user profile: {e}")
         profile = {"xp": 0, "level": 1}
 
     try:
-        flashcards = read_json_from_drive("Flashcards.json")
+        flashcards = read_json_from_drive(vault_files.FLASHCARDS)
         if isinstance(flashcards, list):
             flashcard_stats["total"] = len(flashcards)
             now = datetime.now(config.msk_tz)
@@ -203,20 +286,22 @@ def home():
                 except Exception:
                     continue
     except Exception as e:
-        print(f"[Dashboard] Error getting flashcard stats: {e}")
+        logger.error(f"[Dashboard] Error getting flashcard stats: {e}")
 
     try:
         from key_manager import key_manager
-        current_memory = read_file_from_drive("Memory.md")
+        current_memory = read_file_from_drive(vault_files.MEMORY)
         if current_memory:
             prompt = f"Напиши одно очень короткое (до 15 слов) приветствие для Павел в Time OS 2.0 на русском языке. Можешь упомянуть важный факт из его памяти: {current_memory[:500]}"
             response = key_manager.generate_content(
                 model=config.MODEL_LITE,
                 contents=prompt
             )
-            welcome_msg = response.text.strip()
+            generated = (response.text or "").strip()
+            if generated:
+                welcome_msg = generated
     except Exception as e:
-        print(f"[Dashboard] Welcome message generation error: {e}")
+        logger.error(f"[Dashboard] Welcome message generation error: {e}")
 
     return render_template(
         "dashboard.html",
@@ -234,29 +319,28 @@ def home():
 
 @app.route('/api/webhook/external', methods=['POST'])
 def external_webhook():
-    import os
     try:
-        expected_key = os.getenv("EXTERNAL_API_KEY", "default_secret_key_123")
-        received_key = request.headers.get('X-External-API-Key')
-        if not received_key:
-            received_key = request.args.get('api_key')
+        if not config.EXTERNAL_API_KEY:
+            return jsonify({"success": False, "error": "External webhook is not configured"}), 503
 
-        if not received_key or received_key != expected_key:
+        received_key = request.headers.get('X-External-API-Key') or request.args.get('api_key')
+        if not received_key or not hmac.compare_digest(received_key, config.EXTERNAL_API_KEY):
             return jsonify({"success": False, "error": "Unauthorized: Invalid API Key"}), 401
 
         data = request.get_json(silent=True) or {}
-        text = data.get("text", "").strip()
+        text = (data.get("text") or "").strip()
         if not text:
             return jsonify({"success": False, "error": "Missing 'text' parameter in payload"}), 400
 
         sender = (data.get("sender") or data.get("source") or "External").strip()
         timestamp = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
         inbox_line = f"[{timestamp}] {sender}: {text}"
-        if not append_line_to_drive("Raw_Inbox.md", inbox_line):
-            return jsonify({"success": False, "error": "Failed to append to Raw_Inbox.md"}), 500
+        if not append_line_to_drive(vault_files.RAW_INBOX, inbox_line):
+            return jsonify({"success": False, "error": f"Failed to append to {vault_files.RAW_INBOX}"}), 500
 
         return jsonify({"success": True, "status": "queued", "stored": inbox_line})
     except Exception as e:
+        logger.error(f"[Dashboard] external_webhook error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -267,7 +351,7 @@ def get_due_flashcard():
         if not validate_telegram_data(init_data):
             return jsonify({"success": False, "error": "Unauthorized"}), 403
 
-        flashcards = read_json_from_drive("Flashcards.json")
+        flashcards = read_json_from_drive(vault_files.FLASHCARDS)
         if not isinstance(flashcards, list):
             flashcards = []
 
@@ -287,6 +371,7 @@ def get_due_flashcard():
             return jsonify({"success": True, "card": None})
         return jsonify({"success": True, "card": due_cards[0][1]})
     except Exception as e:
+        logger.error(f"[Dashboard] get_due_flashcard error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -303,34 +388,54 @@ def review_flashcard():
         if not card_id or interval_hours is None:
             return jsonify({"success": False, "error": "id and interval_hours required"}), 400
 
-        interval_hours = float(interval_hours)
-        flashcards = read_json_from_drive("Flashcards.json")
-        if not isinstance(flashcards, list):
-            flashcards = []
+        try:
+            interval_hours = float(interval_hours)
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "interval_hours must be a number"}), 400
 
-        updated = False
         next_review = datetime.now(config.msk_tz) + timedelta(hours=interval_hours)
-        for card in flashcards:
-            if card.get("id") == card_id:
-                card["next_review"] = next_review.strftime("%Y-%m-%d %H:%M:%S")
-                updated = True
-                break
 
-        if not updated:
+        def mutate(flashcards):
+            if not isinstance(flashcards, list):
+                return None
+            for card in flashcards:
+                if card.get("id") == card_id:
+                    card["next_review"] = next_review.strftime("%Y-%m-%d %H:%M:%S")
+                    return flashcards
+            return None
+
+        result = update_json_file_on_drive(vault_files.FLASHCARDS, mutate, default_factory=list)
+
+        if result is None:
             return jsonify({"success": False, "error": "Card not found"}), 404
-
-        if not write_json_to_drive("Flashcards.json", flashcards):
-            return jsonify({"success": False, "error": "Failed to save flashcards"}), 500
 
         return jsonify({"success": True})
     except Exception as e:
+        logger.error(f"[Dashboard] review_flashcard error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@app.route(f'/webhook/{config.TELEGRAM_TOKEN}', methods=['POST'])
-def webhook():
-    json_str = request.stream.read().decode('utf-8')
-    update = telebot.types.Update.de_json(json_str)
-    bot.process_new_updates([update])
-    return '!', 200
+@app.route('/webhook/<secret>', methods=['POST'])
+def webhook(secret):
+    # The path segment is a hash derived from TELEGRAM_TOKEN (see config.py),
+    # not the token itself. Telegram also echoes back the secret_token we
+    # configured in bot.py's set_webhook() call as this header on every
+    # request - checking both means neither value alone (e.g. leaked via a
+    # proxy/log line) is enough to inject fake updates.
+    if not config.WEBHOOK_PATH_SECRET or not hmac.compare_digest(secret, config.WEBHOOK_PATH_SECRET):
+        return '', 404
 
+    header_token = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
+    if not config.WEBHOOK_SECRET_TOKEN or not hmac.compare_digest(header_token, config.WEBHOOK_SECRET_TOKEN):
+        logger.warning("[Dashboard] Webhook request with missing/invalid secret token header rejected.")
+        return '', 403
+
+    try:
+        json_str = request.stream.read().decode('utf-8')
+        update = telebot.types.Update.de_json(json_str)
+        bot.process_new_updates([update])
+    except Exception as e:
+        logger.error(f"[Dashboard] Error processing webhook update: {e}")
+    # Always acknowledge with 200 so Telegram doesn't treat a single bad
+    # update as a delivery failure and retry it indefinitely.
+    return '!', 200

@@ -7,12 +7,14 @@ import vault_files
 import university_schedule
 import vault_index
 import srs
+import note_templates
 from bot_instance import bot
 from key_manager import key_manager
 from logging_config import get_logger
 from drive_service import (
     delete_line_from_task_file,
     get_task_line_by_token,
+    get_folder_id,
     list_markdown_files,
     mark_task_done_by_token,
     read_json_from_drive,
@@ -896,6 +898,64 @@ Notes:
         status.finish(sanitize_telegram_text(raw_text) + _fallback_note(response))
     except Exception as e:
         bot.reply_to(message, f"Ошибка глобального поиска: {e}")
+
+
+_WHO_CATEGORY_META = {
+    "people": {"folder": vault_files.FOLDER_PEOPLE, "icon": "👤", "name_field": "name"},
+    "media": {"folder": vault_files.FOLDER_MEDIA, "icon": "🎬", "name_field": "title"},
+    "projects": {"folder": vault_files.FOLDER_PROJECTS, "icon": "📁", "name_field": "name"},
+}
+
+
+@bot.message_handler(commands=['who'])
+def handle_who(message):
+    """
+    Looks up a person/media/project by name (via vault_index.find_entity,
+    which now also fuzzy-matches close spellings) and sends the note's
+    content directly in the chat - no need to open Obsidian just to recall
+    a detail. No AI call involved, just a direct Index.json + note lookup.
+    """
+    if not is_me(message):
+        return
+    try:
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            bot.reply_to(message, "Укажи имя/название. Пример: `/who Иван`", parse_mode="Markdown")
+            return
+        query = args[1].strip()
+
+        entry = None
+        category = None
+        for candidate_category in _WHO_CATEGORY_META:
+            entry = vault_index.find_entity(candidate_category, query)
+            if entry:
+                category = candidate_category
+                break
+
+        if not entry:
+            bot.reply_to(
+                message,
+                f"Не нашёл «{query}» среди людей/медиа/проектов. Попробуй /search для поиска по всем заметкам."
+            )
+            return
+
+        meta = _WHO_CATEGORY_META[category]
+        filename = entry["file"].split("/")[-1]
+        content = read_file_from_drive(filename, folder_id=get_folder_id(meta["folder"]))
+        fields, body = note_templates.parse_note(content)
+
+        display_name = entry.get(meta["name_field"], query)
+        info_bits = [f"{key}: {fields[key]}" for key in ("category", "status", "rating", "relationship") if fields.get(key)]
+
+        lines = [f"{meta['icon']} {display_name}"]
+        if info_bits:
+            lines.append(" | ".join(info_bits))
+        lines.append("")
+        lines.append(body or "(заметка пока пустая)")
+
+        bot.reply_to(message, "\n".join(lines))
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка поиска карточки: {e}")
 
 
 @bot.message_handler(commands=['digest'])

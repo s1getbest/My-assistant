@@ -13,6 +13,7 @@ Both bot_handlers.py and scheduler_jobs.py import from this module;
 scheduler_jobs.py no longer needs to import anything from bot_handlers.py.
 """
 import re
+import threading
 from datetime import datetime
 from uuid import uuid4
 
@@ -20,6 +21,8 @@ import config
 import vault_files
 import note_templates
 import vault_index
+import srs
+from key_manager import key_manager
 from logging_config import get_logger
 from drive_service import (
     append_line_to_drive,
@@ -240,19 +243,63 @@ def save_entity_note(entity_type, name, extra_fields, body):
         vault_index.upsert_entity(index_category, name, f"{folder_name}/{filename}")
 
 
-def _append_flashcard(question, answer):
+def _append_flashcard(question, answer, source="resource"):
     def mutate(flashcards):
         if not isinstance(flashcards, list):
             flashcards = []
-        flashcards.append({
+        flashcards.append(srs.ensure_srs_fields({
             "id": str(uuid4()),
             "q": question.strip(),
             "a": answer.strip(),
             "next_review": datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M:%S"),
-        })
+            "source": source,
+        }))
         return flashcards
 
     update_json_file_on_drive(vault_files.FLASHCARDS, mutate, default_factory=list)
+
+
+def agent_tutor_background(note_text, source="resource"):
+    """
+    Agent Tutor (background): uses MODEL_COMPLEX to generate a contextual
+    Active Recall flashcard from a saved note/entity update, using Bloom's
+    Taxonomy for level-appropriate questions. Runs in a background thread
+    so it never blocks the caller's reply.
+
+    Called automatically from apply_gemini_tags() below for NOTE/MEDIA/
+    PROJECT tags - this used to only be wired up inside chat_with_gemini
+    in bot_handlers.py, so voice/photo/journal/digest/process never
+    triggered it even for plain [NOTE] tags. Not triggered for PERSON
+    (quizzing yourself on personal facts doesn't fit the flashcard format
+    the way a concept or a show does) or CARD (already a flashcard).
+    """
+    def generate_flashcard():
+        try:
+            prompt = apply_format_rule(f"""You are an expert neuro-education tutor using Bloom's Taxonomy and Spaced Repetition. Analyze the saved note:
+  - If it's an atomic fact (Level 1: word, definition, date), generate a direct Q&A card.
+  - If it's a complex concept, historical event, or university lecture (Level 2 & 3), generate a CONTEXTUAL Active Recall card. Ask 'Why' or 'How does X relate to Y?'. Include the explanatory narrative and Obsidian wikilinks in the answer so the user recalls the whole system.
+  Output strictly: [CARD] Question | Answer with [[wikilinks]].
+
+Note: "{note_text}"
+""")
+            response = key_manager.generate_content(
+                model=config.MODEL_COMPLEX,
+                contents=prompt
+            )
+            card_text = (response.text or "").strip()
+
+            if "[CARD]" in card_text and "|" in card_text:
+                card_body = card_text.split("[CARD]", 1)[1].strip()
+                if "|" in card_body:
+                    question, answer = card_body.split("|", 1)
+                    _append_flashcard(question, answer, source=source)
+                    logger.info(f"[Agent Tutor] Flashcard generated and saved (source={source})")
+        except Exception as e:
+            logger.error(f"[Agent Tutor] Error: {e}")
+
+    thread = threading.Thread(target=generate_flashcard)
+    thread.daemon = True
+    thread.start()
 
 
 def apply_gemini_tags(tags):
@@ -282,9 +329,11 @@ def apply_gemini_tags(tags):
                 append_line_to_drive(vault_files.INBOX, f"* {payload}")
             elif tag_type == "NOTE" and "|" in payload:
                 category, note_text = payload.split("|", 1)
+                note_text = note_text.strip()
                 note_filename = f"{sanitize_note_category(category)}.md"
                 # Note files are automatically routed to the 04-Resources folder by drive_service
-                append_line_to_drive(note_filename, f"* {note_text.strip()}")
+                append_line_to_drive(note_filename, f"* {note_text}")
+                agent_tutor_background(note_text, source="resource")
             elif tag_type == "CARD" and "|" in payload:
                 question, answer = payload.split("|", 1)
                 _append_flashcard(question, answer)
@@ -294,6 +343,8 @@ def apply_gemini_tags(tags):
                 rating = parts[3] if len(parts) > 3 else ""
                 body = parts[4] if len(parts) > 4 else ""
                 save_entity_note("media", title, {"category": category, "status": status, "rating": rating}, body)
+                if body:
+                    agent_tutor_background(f"{title}: {body}", source="media")
             elif tag_type == "PERSON" and "|" in payload:
                 parts = [p.strip() for p in payload.split("|", 2)]
                 name, relationship = parts[0], parts[1] if len(parts) > 1 else ""
@@ -304,6 +355,8 @@ def apply_gemini_tags(tags):
                 name, status = parts[0], parts[1] if len(parts) > 1 else ""
                 body = parts[2] if len(parts) > 2 else ""
                 save_entity_note("project", name, {"status": status}, body)
+                if body:
+                    agent_tutor_background(f"{name}: {body}", source="project")
             elif tag_type == "MOOD":
                 today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
                 append_line_to_drive(vault_files.HEALTH, f"* {today_str}: Mood {payload}")

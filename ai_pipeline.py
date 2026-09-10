@@ -44,7 +44,7 @@ _ENTITY_INDEX_CATEGORY = {"media": "media", "person": "people", "project": "proj
 # === REGEX CONSTANTS ===
 TAG_LINE_RE = re.compile(
     r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|FINANCE|MEMORY|SCHEDULE|QUESTION|MOOD|JOURNAL|GOAL'
-    r'|STEPS|HEART_RATE|STRESS|INBOX|NOTE|CARD|MEDIA|PERSON|PROJECT)\]\s*(.+)$',
+    r'|STEPS|HEART_RATE|STRESS|DISTANCE|CALORIES|INBOX|NOTE|CARD|MEDIA|PERSON|PROJECT)\]\s*(.+)$',
     re.MULTILINE
 )
 
@@ -118,6 +118,8 @@ def get_extraction_rules(today_str):
 [STEPS] ГГГГ-ММ-ДД: количество шагов
 [HEART_RATE] ГГГГ-ММ-ДД: пульс (уд/мин)
 [STRESS] ГГГГ-ММ-ДД: уровень стресса 1-10
+[DISTANCE] ГГГГ-ММ-ДД: дистанция в км
+[CALORIES] ГГГГ-ММ-ДД: калории
 
 Если пользователь просит удалить задачу, используй [TASK_DEL] и передай уникальный фрагмент текста для поиска.
 Если пользователь просит изменить задачу, используй [TASK_EDIT] в формате `старый_текст || новая_строка`.
@@ -146,6 +148,8 @@ def get_extraction_rules(today_str):
 Если пользователь называет количество шагов за день — используй [STEPS] (только число).
 Если пользователь называет свой пульс (в покое, после тренировки и т.п.) — используй [HEART_RATE] (только число, уд/мин).
 Если пользователь называет уровень стресса — используй [STRESS] (число 1-10, если названо словами вроде "сильный стресс" без числа, оцени сам от 1 до 10).
+Если пользователь называет пройденную дистанцию (км) — используй [DISTANCE].
+Если пользователь называет потраченные калории — используй [CALORIES].
 
 ВАЖНО: При сохранении Zettelkasten заметки, выводи [NOTE] Category | Rich text с [[wikilinks]] и #tags.
 Затем выводи ответ пользователю в [ОТВЕТ]. Текст в [ОТВЕТ] ДОЛЖЕН БЫТЬ ЧИСТЫМ. НЕ ставь НИКАКИХ [[wikilinks]], #tags или **bold** в секции [ОТВЕТ]. Просто напиши что-то естественное вроде "Я записал этот факт в базу знаний".
@@ -168,6 +172,8 @@ def get_extraction_rules(today_str):
 - "сегодня прошёл 9500 шагов" → [STEPS] {today_str}: 9500
 - "пульс в покое сегодня утром 58" → [HEART_RATE] {today_str}: 58
 - "уровень стресса сегодня где-то 6 из 10" → [STRESS] {today_str}: 6
+- "сегодня пробежал 5.4 км" → [DISTANCE] {today_str}: 5.4
+- "сжёг сегодня 2150 калорий" → [CALORIES] {today_str}: 2150
 """
 
 
@@ -478,6 +484,10 @@ def apply_gemini_tags(tags):
                 append_health_metric("HR", payload)
             elif tag_type == "STRESS":
                 append_health_metric("Stress", payload)
+            elif tag_type == "DISTANCE":
+                append_health_metric("Distance", payload)
+            elif tag_type == "CALORIES":
+                append_health_metric("Calories", payload)
             elif tag_type == "SCHEDULE" and "|" in payload:
                 dt_str, task_text = payload.split("|", 1)
                 dt_str, task_text = dt_str.strip(), task_text.strip()

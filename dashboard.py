@@ -25,6 +25,8 @@ from drive_service import (
     get_steps_chart_data,
     get_heart_rate_chart_data,
     get_stress_chart_data,
+    get_distance_chart_data,
+    get_calories_chart_data,
     get_habit_completion_array,
     get_user_profile,
     get_monthly_expenses,
@@ -301,6 +303,18 @@ def home():
         stress_data, stress_labels, last_stress = [0], ["No data"], "—"
 
     try:
+        distance_data, distance_labels, last_distance = get_distance_chart_data()
+    except Exception as e:
+        logger.error(f"[Dashboard] Error getting distance data: {e}")
+        distance_data, distance_labels, last_distance = [0], ["No data"], "—"
+
+    try:
+        calories_data, calories_labels, last_calories = get_calories_chart_data()
+    except Exception as e:
+        logger.error(f"[Dashboard] Error getting calories data: {e}")
+        calories_data, calories_labels, last_calories = [0], ["No data"], "—"
+
+    try:
         habit_data = get_habit_completion_array()
         if not habit_data:
             raise ValueError("Empty habit completion array")
@@ -421,6 +435,12 @@ def home():
         stress_data=stress_data,
         stress_labels=stress_labels,
         last_stress=last_stress,
+        distance_data=distance_data,
+        distance_labels=distance_labels,
+        last_distance=last_distance,
+        calories_data=calories_data,
+        calories_labels=calories_labels,
+        last_calories=last_calories,
         habit_data=habit_data,
         welcome_msg=welcome_msg,
         profile=profile,

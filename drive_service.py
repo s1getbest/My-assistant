@@ -597,14 +597,17 @@ _HEALTH_LABELED_TYPES = {
     "steps": "steps",
     "hr": "heart_rate",
     "stress": "stress",
+    "distance": "distance",
+    "calories": "calories",
 }
 
 
 def _parse_health_line(line):
     """
     Returns (date_part, entry_type, value) for one Health.md line, where
-    entry_type is one of "sleep"/"mood"/"steps"/"heart_rate"/"stress", or
-    None if the line doesn't match any recognized shape. A trailing
+    entry_type is one of "sleep"/"mood"/"steps"/"heart_rate"/"stress"/
+    "distance"/"calories", or None if the line doesn't match any
+    recognized shape. A trailing
     "/N" (as in "Mood 8/10" or "Stress 3/10") is stripped before parsing
     the number, so labels that use a fixed 1-10 scale don't need any
     special-casing here.
@@ -675,6 +678,68 @@ def get_heart_rate_chart_data():
 
 def get_stress_chart_data():
     return _get_health_series("stress")
+
+
+def get_distance_chart_data():
+    return _get_health_series("distance")
+
+
+def get_calories_chart_data():
+    return _get_health_series("calories")
+
+
+def merge_health_lines(existing_content, new_lines_text):
+    """
+    Merges freeform Health.md-formatted lines (new_lines_text - one entry
+    per line, same "* YYYY-MM-DD: [Label] value" shape _parse_health_line
+    understands) into existing_content, for bulk-backfilling historical
+    data (e.g. a fitness-app export reformatted into this shape by another
+    AI session with a large context window, then sent here as a file via
+    /import_health - see bot_handlers.py).
+
+    For a (date, entry_type) key already present in existing_content, the
+    new line REPLACES the old one in place (last value wins - reimporting
+    after fixing a typo in the source data just overwrites, it doesn't
+    duplicate); anything new is appended. Every untouched existing line is
+    preserved byte-for-byte rather than the whole file being reformatted
+    from re-parsed (date, type, value) tuples, which would silently drop
+    formatting a round-trip through the parser can't reconstruct (e.g. the
+    "/10" in "Mood 8/10" - _parse_health_line only returns the 8.0).
+
+    Returns (merged_content, stats) where stats is
+    {"added": n, "updated": n, "skipped": n} - "skipped" counts lines in
+    new_lines_text that don't parse as a valid Health.md entry at all
+    (wrong shape, unrecognized label, non-numeric value, ...), so the
+    caller can tell the user if part of their import silently didn't
+    match rather than claiming full success.
+    """
+    existing_lines = existing_content.split("\n") if existing_content.strip() else []
+    key_to_index = {}
+    for i, line in enumerate(existing_lines):
+        parsed = _parse_health_line(line)
+        if parsed:
+            key_to_index[(parsed[0], parsed[1])] = i
+
+    stats = {"added": 0, "updated": 0, "skipped": 0}
+    for raw_line in new_lines_text.split("\n"):
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        parsed = _parse_health_line(raw_line)
+        if not parsed:
+            stats["skipped"] += 1
+            continue
+        key = (parsed[0], parsed[1])
+        normalized_line = raw_line if raw_line.startswith("*") else f"* {raw_line}"
+        if key in key_to_index:
+            existing_lines[key_to_index[key]] = normalized_line
+            stats["updated"] += 1
+        else:
+            existing_lines.append(normalized_line)
+            key_to_index[key] = len(existing_lines) - 1
+            stats["added"] += 1
+
+    return "\n".join(existing_lines), stats
 
 
 def has_health_entry_for_date(entry_type, date_str):

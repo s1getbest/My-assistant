@@ -23,6 +23,7 @@ from drive_service import (
     update_json_file_on_drive,
     add_user_xp,
     append_line_to_drive,
+    merge_health_lines,
 )
 from ai_pipeline import (
     apply_format_rule,
@@ -232,6 +233,9 @@ HELP_TEXT = """🧠 Твой личный второй мозг. Просто п
 /steps <число> — записать шаги за день, например /steps 9500
 /pulse <уд/мин> — записать пульс, например /pulse 62
 /stress <1-10> — записать уровень стресса, например /stress 4
+/distance <км> — записать дистанцию, например /distance 5.4
+/calories <число> — записать калории, например /calories 2150
+/import_health — массовый импорт истории (сон/шаги/пульс/стресс/дистанция/калории) из файла или текста
 /journal <текст> — личный дневник/рефлексия (можно ответить на сообщение)
 /quiz — повторить карточки (Anki-стиль, есть и в мини-аппе)
 /who <имя> — карточка человека/медиа/проекта прямо в чат
@@ -324,6 +328,115 @@ def track_stress(message):
         bot.reply_to(message, f"🧘 **Стресс записан!** (+5 XP)\n\n> {today_str} · {level}/10")
     except Exception as e:
         bot.reply_to(message, f"Ошибка записи стресса: {e}")
+
+
+@bot.message_handler(commands=['distance'])
+def track_distance(message):
+    if not is_me(message):
+        return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "Укажи дистанцию в км. Пример: `/distance 5.4`", parse_mode="Markdown")
+            return
+        km = args[1]
+        today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+        append_health_metric("Distance", f"{today_str}: {km}")
+        bot.reply_to(message, f"🏃 **Дистанция записана!** (+5 XP)\n\n> {today_str} · {km} км")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка записи дистанции: {e}")
+
+
+@bot.message_handler(commands=['calories'])
+def track_calories(message):
+    if not is_me(message):
+        return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "Укажи калории. Пример: `/calories 2150`", parse_mode="Markdown")
+            return
+        kcal = args[1]
+        today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+        append_health_metric("Calories", f"{today_str}: {kcal}")
+        bot.reply_to(message, f"🔥 **Калории записаны!** (+5 XP)\n\n> {today_str} · {kcal} ккал")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка записи калорий: {e}")
+
+
+@bot.message_handler(commands=['import_health'])
+def handle_import_health(message):
+    """
+    Bulk-imports historical Health.md entries (sleep/mood/steps/heart
+    rate/stress/distance/calories) from a big pre-formatted block of text -
+    for backfilling data from before the bot tracked it (e.g. a fitness-app
+    export, reformatted into Health.md's own line syntax by another AI
+    session with a large context window, then sent here as a file - see
+    ARCHITECTURE.md 8.17).
+
+    Deliberately not AI-parsed here, same reasoning as /update_schedule
+    (university_schedule.py's module docstring): historical numbers are
+    exactly the kind of thing a parsing mistake is costly and easy to miss,
+    and the format is trivial to produce directly - drive_service.merge_
+    health_lines() reuses the exact same _parse_health_line() the rest of
+    Health.md already relies on, so "does this line count" is defined in
+    exactly one place.
+
+    A Telegram command is always a plain text message, so a document has
+    to arrive as a separate message: upload the .txt file first (any
+    caption, or none), then reply to THAT message with `/import_health` as
+    plain text. This is the preferred path for anything long, since
+    Telegram caps a single text message around 4096 characters and a
+    month of daily entries can exceed that. Short imports can skip the
+    file entirely: put the data right after the command, or reply with
+    this command to a plain text message containing it.
+    """
+    if not is_me(message):
+        return
+    try:
+        raw_text = ""
+        doc = message.reply_to_message.document if message.reply_to_message else None
+        if doc:
+            file_info = bot.get_file(doc.file_id)
+            downloaded = bot.download_file(file_info.file_path)
+            raw_text = downloaded.decode("utf-8", errors="replace")
+        else:
+            args = message.text.split(maxsplit=1)
+            raw_text = args[1].strip() if len(args) > 1 else ""
+            if not raw_text and message.reply_to_message:
+                raw_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+
+        if not raw_text.strip():
+            bot.reply_to(
+                message,
+                "Пришли файл (.txt) отдельным сообщением, затем ответь на НЕГО командой "
+                "`/import_health` - либо, если данных немного, напиши их сразу после команды "
+                "или ответь этой командой на сообщение с текстом.\n\n"
+                "Формат — по одной записи на строку, как в самом Health.md:\n"
+                "```\n* 2026-08-01: 7.2\n* 2026-08-01: Steps 8423\n* 2026-08-01: HR 61\n"
+                "* 2026-08-01: Stress 4/10\n* 2026-08-01: Distance 5.4\n* 2026-08-01: Calories 2150\n```\n"
+                "Дата без метки = сон (часы). Порядок строк и даты не важны.",
+                parse_mode="Markdown",
+            )
+            return
+
+        stats_holder = {}
+
+        def mutate(current_content):
+            merged, stats = merge_health_lines(current_content, raw_text)
+            stats_holder.update(stats)
+            return merged
+
+        update_file_on_drive(vault_files.HEALTH, mutate)
+        stats = stats_holder
+        reply = f"✅ Импорт завершён: добавлено {stats.get('added', 0)}, обновлено {stats.get('updated', 0)}."
+        if stats.get("skipped"):
+            reply += f"\n⚠️ Не распознано (пропущено) строк: {stats['skipped']} - проверь формат."
+        bot.reply_to(message, reply)
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка импорта: {e}")
 
 
 def _send_next_due_flashcard(chat_id):

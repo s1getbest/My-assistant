@@ -234,11 +234,47 @@
                     <p class="text-2xl font-extrabold text-amber-300 mt-1" id="avgStress">—</p>
                 </div>
             </div>
-            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
                 <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🧘 Тренд стресса</h2>
                 <p class="text-[11px] text-slate-500 mb-3">Из /stress или обычного сообщения ("уровень стресса 6 из 10").</p>
                 <div class="h-44">
                     <canvas id="stressChart"></canvas>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Дистанция</p>
+                    <p class="text-2xl font-extrabold text-sky-400 mt-1">{{ last_distance }} <span class="text-sm">км</span></p>
+                </div>
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (7д)</p>
+                    <p class="text-2xl font-extrabold text-sky-300 mt-1" id="avgDistance">—</p>
+                </div>
+            </div>
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🏃 Тренд дистанции</h2>
+                <p class="text-[11px] text-slate-500 mb-3">Из /distance или обычного сообщения ("пробежал 5.4 км").</p>
+                <div class="h-44">
+                    <canvas id="distanceChart"></canvas>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Калории</p>
+                    <p class="text-2xl font-extrabold text-orange-400 mt-1">{{ last_calories }} <span class="text-sm">ккал</span></p>
+                </div>
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (7д)</p>
+                    <p class="text-2xl font-extrabold text-orange-300 mt-1" id="avgCalories">—</p>
+                </div>
+            </div>
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🔥 Тренд калорий</h2>
+                <p class="text-[11px] text-slate-500 mb-3">Из /calories или обычного сообщения ("сжёг 2150 калорий").</p>
+                <div class="h-44">
+                    <canvas id="caloriesChart"></canvas>
                 </div>
             </div>
         </div>
@@ -391,6 +427,8 @@
         let stepsChartInstance = null;
         let hrChartInstance = null;
         let stressChartInstance = null;
+        let distanceChartInstance = null;
+        let caloriesChartInstance = null;
         let financeChartInstance = null;
         let currentFlashcard = null;
 
@@ -408,6 +446,8 @@
             if (name === 'health' && !stepsChartInstance) initStepsChart();
             if (name === 'health' && !hrChartInstance) initHrChart();
             if (name === 'health' && !stressChartInstance) initStressChart();
+            if (name === 'health' && !distanceChartInstance) initDistanceChart();
+            if (name === 'health' && !caloriesChartInstance) initCaloriesChart();
             if (name === 'study') loadFlashcard();
             if (name === 'finance' && !financeChartInstance) initFinanceChart();
         }
@@ -735,6 +775,18 @@
             const data = {{ stress_data|tojson }};
             const labels = {{ stress_labels|tojson }};
             stressChartInstance = initMetricChart('stressChart', 'avgStress', ' /10', 1, data, labels, '#fbbf24', '251, 191, 36', 10);
+        }
+
+        function initDistanceChart() {
+            const data = {{ distance_data|tojson }};
+            const labels = {{ distance_labels|tojson }};
+            distanceChartInstance = initMetricChart('distanceChart', 'avgDistance', ' км', 1, data, labels, '#38bdf8', '56, 189, 248', null);
+        }
+
+        function initCaloriesChart() {
+            const data = {{ calories_data|tojson }};
+            const labels = {{ calories_labels|tojson }};
+            caloriesChartInstance = initMetricChart('caloriesChart', 'avgCalories', ' ккал', 0, data, labels, '#fb923c', '251, 146, 60', null);
         }
 
         function initFinanceChart() {

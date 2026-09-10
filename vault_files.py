@@ -8,7 +8,7 @@ divergent file instead of raising an error.
 
 Folder layout follows a PARA + Zettelkasten hybrid (see ARCHITECTURE.md):
   00-Inbox      - unprocessed raw input
-  01-Daily      - Tasks.md / Health.md / Finance.md
+  01-Daily      - Tasks.md / Health.md / Finance.md / Journal.md
   02-Projects   - one subfolder per project with a deadline
   03-Areas      - ongoing areas of life without a deadline (e.g. university)
   04-Resources  - Zettelkasten notes (knowledge, articles, ideas)
@@ -22,6 +22,7 @@ Folder layout follows a PARA + Zettelkasten hybrid (see ARCHITECTURE.md):
 TASKS = "Tasks.md"
 HEALTH = "Health.md"
 FINANCE = "Finance.md"
+JOURNAL = "Journal.md"
 MEMORY = "Memory.md"
 GOALS = "Goals.md"
 INBOX = "Inbox.md"
@@ -58,7 +59,7 @@ ALL_FOLDERS = (
 
 # === WHICH FILES LIVE IN WHICH TOP-LEVEL FOLDER ===
 # Files that live in "01-Daily".
-DAILY_FILES = (TASKS, HEALTH, FINANCE)
+DAILY_FILES = (TASKS, HEALTH, FINANCE, JOURNAL)
 
 # Files that live in "00-Inbox" - unprocessed input, not yet triaged.
 INBOX_FILES = (INBOX, RAW_INBOX, QUESTIONS)

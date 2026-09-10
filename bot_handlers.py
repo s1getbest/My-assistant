@@ -33,6 +33,7 @@ from ai_pipeline import (
     extract_reply,
     get_extraction_rules,
     extract_task_text_from_line,
+    append_journal_entry,
 )
 
 logger = get_logger(__name__)
@@ -346,13 +347,14 @@ def handle_voice(message):
 Пользователь прислал голосовую запись в свой личный дневник (Journal).
 Внимательно прослушай аудиофайл и распознай глубокие размышления Павла.
 
-Act as an empathetic listener and coach. Respond with a short, supportive reply. At the very end of your response, add a new tag: `[MOOD] score/10`, where score is your assessment of their emotional state (1-10).
+Act as an empathetic listener and coach. Respond with a short, supportive reply. At the very end of your response, add two tags: `[JOURNAL] transcript_or_faithful_summary`, containing a faithful transcript (or, if speech was unclear in places, a close paraphrase) of what the user actually said - this is the diary entry itself and gets saved verbatim, so do not shorten it into a generic summary - and `[MOOD] score/10`, where score is your assessment of their emotional state (1-10).
 
 Помимо тегов, начни свой живой поддерживающий ответ с [ОТВЕТ], чтобы отделить живой ответ от тегов.
 
 Формат ответа:
 [ОТВЕТ]
 Твой ответ пользователю на русском языке
+[JOURNAL] Транскрипт или точный пересказ того, что сказал пользователь
 [MOOD] score/10
 """)
         else:
@@ -775,6 +777,12 @@ def handle_journal_command(message):
             bot.reply_to(message, "Пожалуйста, напиши свои мысли после команды `/journal` или ответь этой командой на сообщение. Например:\n`/journal Сегодня был прекрасный продуктивный день.`")
             return
 
+        # Save the entry itself right away, independent of the AI call below -
+        # the reflection the user actually wrote is the point of a journal,
+        # and it shouldn't be lost just because the mood-scoring AI call
+        # times out or the API key pool is temporarily exhausted.
+        append_journal_entry(journal_text)
+
         status = StatusMessage(message, "📔 Читаю запись...")
         now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
@@ -835,6 +843,7 @@ def handle_brain_search(message):
         health = read_file_from_drive(vault_files.HEALTH)
         memory = read_file_from_drive(vault_files.MEMORY)
         goals = read_file_from_drive(vault_files.GOALS)
+        journal = read_file_from_drive(vault_files.JOURNAL)
 
         # Compact Index.json summary so /brain also knows about
         # Media/People/Project entities (ARCHITECTURE.md step 3) - their
@@ -868,6 +877,9 @@ def handle_brain_search(message):
 
 [ФАЙЛ Memory.md]
 {truncate_context(memory)}
+
+[ФАЙЛ Journal.md - личный дневник/рефлексия]
+{truncate_context(journal)}
 
 [ИНДЕКС ВТОРОГО МОЗГА - только имена/названия, не полное содержимое заметок]
 Люди: {people_list}

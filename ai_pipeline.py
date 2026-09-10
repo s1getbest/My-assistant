@@ -42,7 +42,7 @@ _ENTITY_INDEX_CATEGORY = {"media": "media", "person": "people", "project": "proj
 
 # === REGEX CONSTANTS ===
 TAG_LINE_RE = re.compile(
-    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|FINANCE|MEMORY|SCHEDULE|QUESTION|MOOD|INBOX|NOTE|CARD'
+    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|FINANCE|MEMORY|SCHEDULE|QUESTION|MOOD|JOURNAL|INBOX|NOTE|CARD'
     r'|MEDIA|PERSON|PROJECT)\]\s*(.+)$',
     re.MULTILINE
 )
@@ -171,6 +171,26 @@ def extract_task_text_from_line(task_line):
     if "|" in stripped:
         return stripped.split("|", 1)[1].strip().replace("⏰ REMINDER:", "", 1).strip()
     return stripped.replace("⏰ REMINDER:", "", 1).strip()
+
+
+def append_journal_entry(text):
+    """
+    Appends a dated entry to Journal.md - the actual reflection text from
+    /journal and voice journal entries. Previously this was discarded
+    entirely: both entry points only ever extracted a [MOOD] score from the
+    AI's response and threw away everything the user actually wrote/said,
+    despite /journal being advertised (and used) as a personal diary. Both
+    entry points now funnel through here so a text /journal (which already
+    has the raw text in hand, no AI round-trip needed to save it) and a
+    voice journal (which needs the model to transcribe it into a [JOURNAL]
+    tag - see apply_gemini_tags below) end up with identically formatted
+    entries.
+    """
+    text = (text or "").strip()
+    if not text:
+        return
+    today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+    append_line_to_drive(vault_files.JOURNAL, f"* {today_str}: {text}")
 
 
 def save_entity_note(entity_type, name, extra_fields, body):
@@ -369,6 +389,16 @@ def apply_gemini_tags(tags):
                 today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
                 append_line_to_drive(vault_files.HEALTH, f"* {today_str}: Mood {payload}")
                 add_user_xp(5)
+            elif tag_type == "JOURNAL":
+                # Voice journal entries (bot_handlers.py handle_voice): the
+                # model transcribes/paraphrases what was said into this tag
+                # since there's no separate transcription step to grab the
+                # raw text from in Python. The text /journal command instead
+                # saves journal_text directly (no AI round-trip needed for
+                # text already in hand) - see append_journal_entry below,
+                # which both paths funnel through so entries look identical
+                # in Journal.md regardless of source.
+                append_journal_entry(payload)
             elif tag_type == "SCHEDULE" and "|" in payload:
                 dt_str, task_text = payload.split("|", 1)
                 dt_str, task_text = dt_str.strip(), task_text.strip()

@@ -1,4 +1,5 @@
 import re
+import time
 from datetime import datetime, timedelta
 import telebot
 from google.genai import types
@@ -399,9 +400,27 @@ def handle_import_health(message):
         raw_text = ""
         doc = message.reply_to_message.document if message.reply_to_message else None
         if doc:
-            file_info = bot.get_file(doc.file_id)
-            downloaded = bot.download_file(file_info.file_path)
-            raw_text = downloaded.decode("utf-8", errors="replace")
+            # A transient timeout hitting Telegram's file-serving endpoint
+            # (seen in practice: HTTPSConnectionPool read timeout on a
+            # 3 KB file - clearly not a size/bandwidth issue, just a
+            # one-off network hiccup) shouldn't force the user to
+            # re-upload and re-reply from scratch. Same short-retry
+            # pattern already used for Drive reads/writes.
+            last_err = None
+            for attempt in range(3):
+                try:
+                    file_info = bot.get_file(doc.file_id)
+                    downloaded = bot.download_file(file_info.file_path)
+                    raw_text = downloaded.decode("utf-8", errors="replace")
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    logger.warning(f"[ImportHealth] Download attempt {attempt + 1}/3 failed: {e}")
+                    if attempt < 2:
+                        time.sleep(2)
+            if last_err:
+                raise last_err
         else:
             args = message.text.split(maxsplit=1)
             raw_text = args[1].strip() if len(args) > 1 else ""

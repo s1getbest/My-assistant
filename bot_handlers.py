@@ -237,6 +237,8 @@ HELP_TEXT = """🧠 Твой личный второй мозг. Просто п
 /digest — разобрать Raw_Inbox.md (внешние заметки) на задачи/вопросы
 /process — разобрать Inbox.md на заметки/карточки
 
+📍 Отправь геолокацию (скрепка → Локация) — запишу её в Location.md.
+
 Открой кнопку меню рядом с полем ввода — там дашборд со статистикой, задачами, финансами и повторением карточек."""
 
 
@@ -402,6 +404,39 @@ Act as an empathetic listener and coach. Respond with a short, supportive reply.
         status.finish(reply_part + _fallback_note(response))
     except Exception as e:
         status.finish(f"Ошибка обработки голосового сообщения: {e}")
+
+
+@bot.message_handler(content_types=['location'])
+def handle_location(message):
+    """
+    Logs a location shared via Telegram's own "share location" feature
+    (paperclip -> Location) to Location.md - the lowest-friction possible
+    starting point on geolocation (ARCHITECTURE.md 9 "Отложено": method
+    was undecided). No extra app, no Google OAuth scope, no phone
+    automation to set up - works identically on Android and iOS since it's
+    just a native Telegram message type.
+
+    Only the initial share is logged, not every live-location update.
+    Telegram resends a "live" share (message.location.live_period set) as
+    edited_message events every ~15-60s while it's active - logging each
+    one would flood Location.md for little value. A future iteration could
+    throttle those into periodic checkpoints (e.g. one entry per 30 min)
+    via @bot.edited_message_handler(content_types=['location']) if
+    continuous tracking (not just point-in-time check-ins) turns out to be
+    what's actually wanted.
+    """
+    if not is_me(message):
+        return
+    try:
+        loc = message.location
+        now_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
+        maps_link = f"https://maps.google.com/?q={loc.latitude},{loc.longitude}"
+        is_live = bool(getattr(loc, "live_period", None))
+        label = "Live-геолокация (начало)" if is_live else "Геолокация"
+        append_line_to_drive(vault_files.LOCATION, f"* {now_str}: {label} — {maps_link}")
+        bot.reply_to(message, f"📍 {label} записана.")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка записи геолокации: {e}")
 
 
 @bot.message_handler(content_types=['photo'])

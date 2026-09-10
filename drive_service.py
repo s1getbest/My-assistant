@@ -602,6 +602,19 @@ _HEALTH_LABELED_TYPES = {
 }
 
 
+# Matches "YYYY-MM-DD: <rest of line>" anywhere within a line - used
+# instead of "split on the first colon and strip a specific bullet
+# character" so _parse_health_line doesn't care what (if anything)
+# precedes the date: "* ", "- ", "  - " (indented), "• ", "1. ", or
+# nothing at all. A bulk historical import can arrive formatted by a
+# notes app or another AI session using any of these list-marker
+# conventions, and a mismatch here isn't a loud error - it's a
+# date_part that quietly fails every exact-match date comparison
+# downstream (has_health_entry_for_date, merge_health_lines' dedup) while
+# still "parsing" as something.
+_HEALTH_LINE_RE = re.compile(r'(\d{4}-\d{2}-\d{2})\s*:\s*(.+)$')
+
+
 def _parse_health_line(line):
     """
     Returns (date_part, entry_type, value) for one Health.md line, where
@@ -613,10 +626,13 @@ def _parse_health_line(line):
     special-casing here.
     """
     line = line.strip()
-    if not line or ":" not in line:
+    if not line:
         return None
-    date_part = line.split(":", 1)[0].replace("*", "").strip()
-    val_part = line.split(":", 1)[1].strip()
+    match = _HEALTH_LINE_RE.search(line)
+    if not match:
+        return None
+    date_part = match.group(1)
+    val_part = match.group(2).strip()
     lowered = val_part.lower()
     for label, entry_type in _HEALTH_LABELED_TYPES.items():
         if lowered.startswith(label):
@@ -730,7 +746,13 @@ def merge_health_lines(existing_content, new_lines_text):
             stats["skipped"] += 1
             continue
         key = (parsed[0], parsed[1])
-        normalized_line = raw_line if raw_line.startswith("*") else f"* {raw_line}"
+        # Rebuild as a clean "* YYYY-MM-DD: <rest>" line rather than
+        # keeping whatever preceded the date in the source (a raw "-",
+        # "• ", "1. ", ...) - _HEALTH_LINE_RE match is reused here so the
+        # stored line always looks the same regardless of which list-marker
+        # convention the import happened to use.
+        match = _HEALTH_LINE_RE.search(raw_line)
+        normalized_line = f"* {match.group(1)}: {match.group(2).strip()}"
         if key in key_to_index:
             existing_lines[key_to_index[key]] = normalized_line
             stats["updated"] += 1

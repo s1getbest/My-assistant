@@ -764,6 +764,54 @@ def merge_health_lines(existing_content, new_lines_text):
     return "\n".join(existing_lines), stats
 
 
+# One key per YYYY-MM-DD (matched via DATE_KEY_RE below). Each value is a
+# free-shaped dict for that day's richer wearable data - sleep phases,
+# heart-rate range/HRV, stress distribution, calories goal vs actual - see
+# ARCHITECTURE.md 8.18 for the exact shape this is expected to have and
+# why it's a separate JSON store rather than more Health.md line types:
+# Health.md's "one scalar value per line" shape has no natural place for
+# nested/multi-field data like "56% light sleep, 12% deep, 6% REM" or a
+# stress score's Low/Normal/Medium/High time breakdown.
+DATE_KEY_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+
+def merge_health_detailed_records(existing_data, new_records):
+    """
+    Upserts per-day detailed health records into the HealthDetailed.json
+    store (see vault_files.HEALTH_DETAILED), keyed by date. Unlike
+    merge_health_lines (several independent typed entries per day in a
+    flat text file), each day here is a single JSON object - a re-import
+    for an already-known date REPLACES that whole day's record outright
+    (the newer import is assumed to be the more complete/correct one)
+    rather than deep-merging individual sub-fields, which would need to
+    guess whether a field's absence in the new data means "unchanged" or
+    "actually gone".
+
+    Returns (merged_data, stats) where stats is {"added": n, "updated": n,
+    "skipped": n} - "skipped" counts keys in new_records that aren't a
+    plausible YYYY-MM-DD date, or whose value isn't itself an object.
+    """
+    if not isinstance(existing_data, dict):
+        existing_data = {}
+    merged = dict(existing_data)
+    stats = {"added": 0, "updated": 0, "skipped": 0}
+
+    if not isinstance(new_records, dict):
+        return merged, stats
+
+    for date_key, record in new_records.items():
+        if not DATE_KEY_RE.match(str(date_key)) or not isinstance(record, dict):
+            stats["skipped"] += 1
+            continue
+        if date_key in merged:
+            stats["updated"] += 1
+        else:
+            stats["added"] += 1
+        merged[date_key] = record
+
+    return merged, stats
+
+
 def has_health_entry_for_date(entry_type, date_str):
     """
     True if Health.md has an entry of the given type (see

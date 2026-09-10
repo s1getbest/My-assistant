@@ -153,13 +153,22 @@
 
         <!-- TAB 2: HEALTH -->
         <div id="tab-health" class="tab-panel hidden">
+            <!-- Period toggle - shared by every chart below, see setHealthPeriod() -->
+            <div class="flex gap-1.5 mb-4 overflow-x-auto pb-1">
+                <button onclick="setHealthPeriod('week')" data-period="week" class="health-period-btn shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-indigo-500 text-white">Неделя</button>
+                <button onclick="setHealthPeriod('month')" data-period="month" class="health-period-btn shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-slate-900 text-slate-400 border border-slate-800">Месяц</button>
+                <button onclick="setHealthPeriod('year')" data-period="year" class="health-period-btn shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-slate-900 text-slate-400 border border-slate-800">Год</button>
+                <button onclick="setHealthPeriod('5y')" data-period="5y" class="health-period-btn shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-slate-900 text-slate-400 border border-slate-800">5 лет</button>
+                <button onclick="setHealthPeriod('10y')" data-period="10y" class="health-period-btn shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-slate-900 text-slate-400 border border-slate-800">10 лет</button>
+            </div>
+
             <div class="grid grid-cols-2 gap-3 mb-4">
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
                     <p class="text-[10px] font-bold text-slate-400 uppercase">Последний сон</p>
                     <p class="text-2xl font-extrabold text-indigo-400 mt-1">{{ last_sleep }} <span class="text-sm">ч</span></p>
                 </div>
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (7д)</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (<span class="health-period-label">7д</span>)</p>
                     <p class="text-2xl font-extrabold text-indigo-300 mt-1" id="avgSleep">—</p>
                 </div>
             </div>
@@ -172,29 +181,11 @@
 
             <div class="grid grid-cols-2 gap-3 mb-4">
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Настроение</p>
-                    <p class="text-2xl font-extrabold text-fuchsia-400 mt-1">{{ last_mood }} <span class="text-sm">/10</span></p>
-                </div>
-                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (7д)</p>
-                    <p class="text-2xl font-extrabold text-fuchsia-300 mt-1" id="avgMood">—</p>
-                </div>
-            </div>
-            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🎭 Тренд настроения</h2>
-                <p class="text-[11px] text-slate-500 mb-3">По записям из /journal и голосовых дневников.</p>
-                <div class="h-44">
-                    <canvas id="moodChart"></canvas>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-2 gap-3 mb-4">
-                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
                     <p class="text-[10px] font-bold text-slate-400 uppercase">Шаги</p>
                     <p class="text-2xl font-extrabold text-emerald-400 mt-1">{{ last_steps }}</p>
                 </div>
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (7д)</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (<span class="health-period-label">7д</span>)</p>
                     <p class="text-2xl font-extrabold text-emerald-300 mt-1" id="avgSteps">—</p>
                 </div>
             </div>
@@ -212,7 +203,7 @@
                     <p class="text-2xl font-extrabold text-rose-400 mt-1">{{ last_hr }} <span class="text-sm">уд/мин</span></p>
                 </div>
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (7д)</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (<span class="health-period-label">7д</span>)</p>
                     <p class="text-2xl font-extrabold text-rose-300 mt-1" id="avgHr">—</p>
                 </div>
             </div>
@@ -230,7 +221,7 @@
                     <p class="text-2xl font-extrabold text-amber-400 mt-1">{{ last_stress }} <span class="text-sm">/10</span></p>
                 </div>
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (7д)</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (<span class="health-period-label">7д</span>)</p>
                     <p class="text-2xl font-extrabold text-amber-300 mt-1" id="avgStress">—</p>
                 </div>
             </div>
@@ -248,7 +239,7 @@
                     <p class="text-2xl font-extrabold text-sky-400 mt-1">{{ last_distance }} <span class="text-sm">км</span></p>
                 </div>
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (7д)</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (<span class="health-period-label">7д</span>)</p>
                     <p class="text-2xl font-extrabold text-sky-300 mt-1" id="avgDistance">—</p>
                 </div>
             </div>
@@ -266,7 +257,7 @@
                     <p class="text-2xl font-extrabold text-orange-400 mt-1">{{ last_calories }} <span class="text-sm">ккал</span></p>
                 </div>
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (7д)</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (<span class="health-period-label">7д</span>)</p>
                     <p class="text-2xl font-extrabold text-orange-300 mt-1" id="avgCalories">—</p>
                 </div>
             </div>
@@ -422,15 +413,10 @@
         }
 
         const TABS = ['overview', 'tasks', 'health', 'study', 'finance'];
-        let chartInstance = null;
-        let moodChartInstance = null;
-        let stepsChartInstance = null;
-        let hrChartInstance = null;
-        let stressChartInstance = null;
-        let distanceChartInstance = null;
-        let caloriesChartInstance = null;
         let financeChartInstance = null;
         let currentFlashcard = null;
+        let currentHealthPeriod = 'week';
+        let healthChartsInitialized = false;
 
         function getTelegramInitData() {
             return window.Telegram?.WebApp?.initData || '';
@@ -441,13 +427,7 @@
                 document.getElementById('tab-' + t).classList.toggle('hidden', t !== name);
                 document.getElementById('nav-' + t).classList.toggle('nav-active', t === name);
             });
-            if (name === 'health' && !chartInstance) initChart();
-            if (name === 'health' && !moodChartInstance) initMoodChart();
-            if (name === 'health' && !stepsChartInstance) initStepsChart();
-            if (name === 'health' && !hrChartInstance) initHrChart();
-            if (name === 'health' && !stressChartInstance) initStressChart();
-            if (name === 'health' && !distanceChartInstance) initDistanceChart();
-            if (name === 'health' && !caloriesChartInstance) initCaloriesChart();
+            if (name === 'health' && !healthChartsInitialized) initHealthCharts();
             if (name === 'study') loadFlashcard();
             if (name === 'finance' && !financeChartInstance) initFinanceChart();
         }
@@ -609,45 +589,74 @@
             await loadFlashcard();
         }
 
-        function initChart() {
-            const sleepData = {{ sleep_data|tojson }};
-            const sleepLabels = {{ sleep_labels|tojson }};
-            const valid = sleepData.filter(v => v > 0);
-            if (valid.length) {
-                const avg = (valid.reduce((a, b) => a + b, 0) / valid.length).toFixed(1);
-                document.getElementById('avgSleep').textContent = avg + ' ч';
+        // One config per Health-tab metric, driving both the initial
+        // server-rendered ("week") chart and every subsequent period-toggle
+        // update - see renderHealthMetric()/setHealthPeriod() below. Keys
+        // match /api/health_series's response shape (drive_service.
+        // get_health_dashboard_series).
+        const HEALTH_METRICS = [
+            { key: 'sleep', canvasId: 'sleepChart', avgId: 'avgSleep', suffix: ' ч', decimals: 1, color: '#818cf8', glow: '129, 140, 248', yMax: null },
+            { key: 'steps', canvasId: 'stepsChart', avgId: 'avgSteps', suffix: '', decimals: 0, color: '#34d399', glow: '52, 211, 153', yMax: null },
+            { key: 'hr', canvasId: 'hrChart', avgId: 'avgHr', suffix: ' уд/мин', decimals: 0, color: '#fb7185', glow: '251, 113, 133', yMax: null },
+            { key: 'stress', canvasId: 'stressChart', avgId: 'avgStress', suffix: ' /10', decimals: 1, color: '#fbbf24', glow: '251, 191, 36', yMax: 10 },
+            { key: 'distance', canvasId: 'distanceChart', avgId: 'avgDistance', suffix: ' км', decimals: 1, color: '#38bdf8', glow: '56, 189, 248', yMax: null },
+            { key: 'calories', canvasId: 'caloriesChart', avgId: 'avgCalories', suffix: ' ккал', decimals: 0, color: '#fb923c', glow: '251, 146, 60', yMax: null },
+        ];
+        const healthChartInstances = {};
+        const HEALTH_PERIOD_LABELS = { week: '7д', month: '30д', year: 'год', '5y': '5 лет', '10y': '10 лет' };
+
+        function renderHealthMetric(metric, data, labels) {
+            const valid = data.filter(v => v > 0);
+            document.getElementById(metric.avgId).textContent = valid.length
+                ? (valid.reduce((a, b) => a + b, 0) / valid.length).toFixed(metric.decimals) + metric.suffix
+                : '—';
+
+            // Long-range views (year/5y/10y can be hundreds or thousands of
+            // daily points) drop per-point markers and use a thinner line so
+            // the chart stays a legible trend line instead of a solid blob
+            // of overlapping circles.
+            const dense = data.length > 60;
+
+            const existing = healthChartInstances[metric.key];
+            if (existing) {
+                existing.data.labels = labels;
+                existing.data.datasets[0].data = data;
+                existing.data.datasets[0].pointRadius = dense ? 0 : 4;
+                existing.data.datasets[0].borderWidth = dense ? 1.5 : 2.5;
+                existing.update();
+                return;
             }
 
-            const ctx = document.getElementById('sleepChart').getContext('2d');
-            const neonGradient = ctx.createLinearGradient(0, 0, 0, 176);
-            neonGradient.addColorStop(0, 'rgba(129, 140, 248, 0.35)');
-            neonGradient.addColorStop(1, 'rgba(129, 140, 248, 0)');
+            const ctx = document.getElementById(metric.canvasId).getContext('2d');
+            const gradient = ctx.createLinearGradient(0, 0, 0, 176);
+            gradient.addColorStop(0, `rgba(${metric.glow}, 0.35)`);
+            gradient.addColorStop(1, `rgba(${metric.glow}, 0)`);
 
             const neonGlow = {
-                id: 'neonGlow',
+                id: 'neonGlow-' + metric.key,
                 beforeDatasetsDraw(chart) {
                     chart.ctx.save();
-                    chart.ctx.shadowColor = 'rgba(129, 140, 248, 0.9)';
+                    chart.ctx.shadowColor = `rgba(${metric.glow}, 0.9)`;
                     chart.ctx.shadowBlur = 14;
                 },
                 afterDatasetsDraw(chart) { chart.ctx.restore(); },
             };
 
-            chartInstance = new Chart(ctx, {
+            healthChartInstances[metric.key] = new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: sleepLabels,
+                    labels: labels,
                     datasets: [{
-                        data: sleepData,
-                        borderColor: '#818cf8',
-                        backgroundColor: neonGradient,
+                        data: data,
+                        borderColor: metric.color,
+                        backgroundColor: gradient,
                         tension: 0.4,
                         fill: true,
-                        borderWidth: 2.5,
-                        pointBackgroundColor: '#c7d2fe',
-                        pointBorderColor: '#818cf8',
+                        borderWidth: dense ? 1.5 : 2.5,
+                        pointBackgroundColor: metric.color,
+                        pointBorderColor: metric.color,
                         pointBorderWidth: 2,
-                        pointRadius: 4,
+                        pointRadius: dense ? 0 : 4,
                     }],
                 },
                 plugins: [neonGlow],
@@ -656,101 +665,10 @@
                     maintainAspectRatio: false,
                     plugins: { legend: { display: false } },
                     scales: {
-                        x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 9 } } },
-                        y: { min: 0, grid: { color: 'rgba(129, 140, 248, 0.08)' }, ticks: { color: '#94a3b8', font: { size: 9 }, stepSize: 2 } },
-                    },
-                },
-            });
-        }
-
-        function initMoodChart() {
-            const moodData = {{ mood_data|tojson }};
-            const moodLabels = {{ mood_labels|tojson }};
-            const valid = moodData.filter(v => v > 0);
-            if (valid.length) {
-                const avg = (valid.reduce((a, b) => a + b, 0) / valid.length).toFixed(1);
-                document.getElementById('avgMood').textContent = avg + ' /10';
-            }
-
-            const ctx = document.getElementById('moodChart').getContext('2d');
-            const moodGradient = ctx.createLinearGradient(0, 0, 0, 176);
-            moodGradient.addColorStop(0, 'rgba(232, 121, 249, 0.35)');
-            moodGradient.addColorStop(1, 'rgba(232, 121, 249, 0)');
-
-            moodChartInstance = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: moodLabels,
-                    datasets: [{
-                        data: moodData,
-                        borderColor: '#e879f9',
-                        backgroundColor: moodGradient,
-                        tension: 0.4,
-                        fill: true,
-                        borderWidth: 2.5,
-                        pointBackgroundColor: '#f5d0fe',
-                        pointBorderColor: '#e879f9',
-                        pointBorderWidth: 2,
-                        pointRadius: 4,
-                    }],
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 9 } } },
-                        y: { min: 0, max: 10, grid: { color: 'rgba(232, 121, 249, 0.08)' }, ticks: { color: '#94a3b8', font: { size: 9 }, stepSize: 2 } },
-                    },
-                },
-            });
-        }
-
-        function initMetricChart(canvasId, avgElId, avgSuffix, avgDecimals, data, labels, lineColor, glowRgb, yMax) {
-            // Shared line-chart renderer for the steps/heart-rate/stress
-            // tiles - same neon-gradient style as initChart()/initMoodChart()
-            // above, just parameterized instead of copy-pasted three more
-            // times with only the color/scale/decimals differing.
-            // glowRgb is a bare "r, g, b" triplet so the two gradient stops
-            // (35% and 0% alpha) can be built directly, without any
-            // string-surgery on a pre-built rgba() value.
-            const valid = data.filter(v => v > 0);
-            if (valid.length) {
-                const avg = (valid.reduce((a, b) => a + b, 0) / valid.length).toFixed(avgDecimals);
-                document.getElementById(avgElId).textContent = avg + avgSuffix;
-            }
-
-            const ctx = document.getElementById(canvasId).getContext('2d');
-            const gradient = ctx.createLinearGradient(0, 0, 0, 176);
-            gradient.addColorStop(0, `rgba(${glowRgb}, 0.35)`);
-            gradient.addColorStop(1, `rgba(${glowRgb}, 0)`);
-
-            return new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        data: data,
-                        borderColor: lineColor,
-                        backgroundColor: gradient,
-                        tension: 0.4,
-                        fill: true,
-                        borderWidth: 2.5,
-                        pointBackgroundColor: lineColor,
-                        pointBorderColor: lineColor,
-                        pointBorderWidth: 2,
-                        pointRadius: 4,
-                    }],
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 9 } } },
+                        x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 9 }, autoSkip: true, maxTicksLimit: 10 } },
                         y: {
                             min: 0,
-                            ...(yMax ? { max: yMax } : {}),
+                            ...(metric.yMax ? { max: metric.yMax } : {}),
                             grid: { color: 'rgba(148, 163, 184, 0.08)' },
                             ticks: { color: '#94a3b8', font: { size: 9 } },
                         },
@@ -759,34 +677,55 @@
             });
         }
 
-        function initStepsChart() {
-            const data = {{ steps_data|tojson }};
-            const labels = {{ steps_labels|tojson }};
-            stepsChartInstance = initMetricChart('stepsChart', 'avgSteps', '', 0, data, labels, '#34d399', '52, 211, 153', null);
+        function initHealthCharts() {
+            // First render uses the data baked into the page at load time
+            // (server-side, "week" period) - fast first paint, no extra
+            // round trip just to show what the page already has.
+            healthChartsInitialized = true;
+            const initialSeries = {
+                sleep: [{{ sleep_data|tojson }}, {{ sleep_labels|tojson }}],
+                steps: [{{ steps_data|tojson }}, {{ steps_labels|tojson }}],
+                hr: [{{ hr_data|tojson }}, {{ hr_labels|tojson }}],
+                stress: [{{ stress_data|tojson }}, {{ stress_labels|tojson }}],
+                distance: [{{ distance_data|tojson }}, {{ distance_labels|tojson }}],
+                calories: [{{ calories_data|tojson }}, {{ calories_labels|tojson }}],
+            };
+            HEALTH_METRICS.forEach(metric => {
+                const [data, labels] = initialSeries[metric.key];
+                renderHealthMetric(metric, data, labels);
+            });
         }
 
-        function initHrChart() {
-            const data = {{ hr_data|tojson }};
-            const labels = {{ hr_labels|tojson }};
-            hrChartInstance = initMetricChart('hrChart', 'avgHr', ' уд/мин', 0, data, labels, '#fb7185', '251, 113, 133', null);
-        }
+        async function setHealthPeriod(period) {
+            if (period === currentHealthPeriod && healthChartsInitialized) return;
+            currentHealthPeriod = period;
 
-        function initStressChart() {
-            const data = {{ stress_data|tojson }};
-            const labels = {{ stress_labels|tojson }};
-            stressChartInstance = initMetricChart('stressChart', 'avgStress', ' /10', 1, data, labels, '#fbbf24', '251, 191, 36', 10);
-        }
+            document.querySelectorAll('.health-period-btn').forEach(btn => {
+                const active = btn.dataset.period === period;
+                btn.classList.toggle('bg-indigo-500', active);
+                btn.classList.toggle('text-white', active);
+                btn.classList.toggle('bg-slate-900', !active);
+                btn.classList.toggle('text-slate-400', !active);
+                btn.classList.toggle('border', !active);
+                btn.classList.toggle('border-slate-800', !active);
+            });
+            document.querySelectorAll('.health-period-label').forEach(el => {
+                el.textContent = HEALTH_PERIOD_LABELS[period] || period;
+            });
 
-        function initDistanceChart() {
-            const data = {{ distance_data|tojson }};
-            const labels = {{ distance_labels|tojson }};
-            distanceChartInstance = initMetricChart('distanceChart', 'avgDistance', ' км', 1, data, labels, '#38bdf8', '56, 189, 248', null);
-        }
-
-        function initCaloriesChart() {
-            const data = {{ calories_data|tojson }};
-            const labels = {{ calories_labels|tojson }};
-            caloriesChartInstance = initMetricChart('caloriesChart', 'avgCalories', ' ккал', 0, data, labels, '#fb923c', '251, 146, 60', null);
+            try {
+                const res = await fetch('/api/health_series?period=' + encodeURIComponent(period), {
+                    headers: { 'Authorization': getTelegramInitData() }
+                });
+                const result = await res.json();
+                if (!result.success) throw new Error(result.error || 'Failed');
+                HEALTH_METRICS.forEach(metric => {
+                    const series = result.series[metric.key];
+                    if (series) renderHealthMetric(metric, series.data, series.labels);
+                });
+            } catch (e) {
+                showToast('Не удалось загрузить данные за период: ' + e.message);
+            }
         }
 
         function initFinanceChart() {

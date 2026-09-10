@@ -593,7 +593,6 @@ def get_monthly_expenses():
 # compatibility with every sleep entry ever written before other metrics
 # existed - handled as the fallback in _parse_health_line, not listed here.
 _HEALTH_LABELED_TYPES = {
-    "mood": "mood",
     "steps": "steps",
     "hr": "heart_rate",
     "stress": "stress",
@@ -610,20 +609,19 @@ _HEALTH_LABELED_TYPES = {
 # notes app or another AI session using any of these list-marker
 # conventions, and a mismatch here isn't a loud error - it's a
 # date_part that quietly fails every exact-match date comparison
-# downstream (has_health_entry_for_date, merge_health_lines' dedup) while
-# still "parsing" as something.
+# downstream (has_health_entry_for_date exact-match lookups) while still
+# "parsing" as something.
 _HEALTH_LINE_RE = re.compile(r'(\d{4}-\d{2}-\d{2})\s*:\s*(.+)$')
 
 
 def _parse_health_line(line):
     """
     Returns (date_part, entry_type, value) for one Health.md line, where
-    entry_type is one of "sleep"/"mood"/"steps"/"heart_rate"/"stress"/
+    entry_type is one of "sleep"/"steps"/"heart_rate"/"stress"/
     "distance"/"calories", or None if the line doesn't match any
     recognized shape. A trailing
-    "/N" (as in "Mood 8/10" or "Stress 3/10") is stripped before parsing
-    the number, so labels that use a fixed 1-10 scale don't need any
-    special-casing here.
+    "/N" (as in "Stress 3/10") is stripped before parsing the number, so
+    labels that use a fixed 1-10 scale don't need any special-casing here.
     """
     line = line.strip()
     if not line:
@@ -680,10 +678,6 @@ def get_sleep_chart_data():
     return _get_health_series("sleep")
 
 
-def get_mood_chart_data():
-    return _get_health_series("mood")
-
-
 def get_steps_chart_data():
     return _get_health_series("steps")
 
@@ -704,112 +698,49 @@ def get_calories_chart_data():
     return _get_health_series("calories")
 
 
-def merge_health_lines(existing_content, new_lines_text):
+# Dashboard period-toggle (week/month/year/5y/10y): maps each period label
+# to how many of the most recent entries _get_health_series should return.
+# Approximate (365/1825/3650, not calendar-exact) - fine for a trend chart,
+# not a billing system. "5y"/"10y" only matter once there's actually that
+# much history; _get_health_series already handles "fewer entries exist
+# than the limit" gracefully (just returns everything there is).
+HEALTH_PERIOD_DAYS = {
+    "week": 7,
+    "month": 30,
+    "year": 365,
+    "5y": 1825,
+    "10y": 3650,
+}
+
+# Ordered so the dashboard's period-toggle response has a stable key per
+# metric regardless of how _HEALTH_LABELED_TYPES/entry-type names evolve.
+_HEALTH_DASHBOARD_METRICS = (
+    ("sleep", "sleep"),
+    ("steps", "steps"),
+    ("hr", "heart_rate"),
+    ("stress", "stress"),
+    ("distance", "distance"),
+    ("calories", "calories"),
+)
+
+
+def get_health_dashboard_series(period="week"):
     """
-    Merges freeform Health.md-formatted lines (new_lines_text - one entry
-    per line, same "* YYYY-MM-DD: [Label] value" shape _parse_health_line
-    understands) into existing_content, for bulk-backfilling historical
-    data (e.g. a fitness-app export reformatted into this shape by another
-    AI session with a large context window, then sent here as a file via
-    /import_health - see bot_handlers.py).
+    Returns every Health.md metric's chart series at once for the given
+    period (a key of HEALTH_PERIOD_DAYS, defaulting to "week" for an
+    unrecognized value) - one call for the dashboard's period-toggle
+    instead of one request per metric per period switch.
 
-    For a (date, entry_type) key already present in existing_content, the
-    new line REPLACES the old one in place (last value wins - reimporting
-    after fixing a typo in the source data just overwrites, it doesn't
-    duplicate); anything new is appended. Every untouched existing line is
-    preserved byte-for-byte rather than the whole file being reformatted
-    from re-parsed (date, type, value) tuples, which would silently drop
-    formatting a round-trip through the parser can't reconstruct (e.g. the
-    "/10" in "Mood 8/10" - _parse_health_line only returns the 8.0).
-
-    Returns (merged_content, stats) where stats is
-    {"added": n, "updated": n, "skipped": n} - "skipped" counts lines in
-    new_lines_text that don't parse as a valid Health.md entry at all
-    (wrong shape, unrecognized label, non-numeric value, ...), so the
-    caller can tell the user if part of their import silently didn't
-    match rather than claiming full success.
+    Shape: {"sleep": {"data": [...], "labels": [...], "last": "..."},
+    "steps": {...}, "hr": {...}, "stress": {...}, "distance": {...},
+    "calories": {...}}.
     """
-    existing_lines = existing_content.split("\n") if existing_content.strip() else []
-    key_to_index = {}
-    for i, line in enumerate(existing_lines):
-        parsed = _parse_health_line(line)
-        if parsed:
-            key_to_index[(parsed[0], parsed[1])] = i
-
-    stats = {"added": 0, "updated": 0, "skipped": 0}
-    for raw_line in new_lines_text.split("\n"):
-        raw_line = raw_line.strip()
-        if not raw_line:
-            continue
-        parsed = _parse_health_line(raw_line)
-        if not parsed:
-            stats["skipped"] += 1
-            continue
-        key = (parsed[0], parsed[1])
-        # Rebuild as a clean "* YYYY-MM-DD: <rest>" line rather than
-        # keeping whatever preceded the date in the source (a raw "-",
-        # "• ", "1. ", ...) - _HEALTH_LINE_RE match is reused here so the
-        # stored line always looks the same regardless of which list-marker
-        # convention the import happened to use.
-        match = _HEALTH_LINE_RE.search(raw_line)
-        normalized_line = f"* {match.group(1)}: {match.group(2).strip()}"
-        if key in key_to_index:
-            existing_lines[key_to_index[key]] = normalized_line
-            stats["updated"] += 1
-        else:
-            existing_lines.append(normalized_line)
-            key_to_index[key] = len(existing_lines) - 1
-            stats["added"] += 1
-
-    return "\n".join(existing_lines), stats
-
-
-# One key per YYYY-MM-DD (matched via DATE_KEY_RE below). Each value is a
-# free-shaped dict for that day's richer wearable data - sleep phases,
-# heart-rate range/HRV, stress distribution, calories goal vs actual - see
-# ARCHITECTURE.md 8.18 for the exact shape this is expected to have and
-# why it's a separate JSON store rather than more Health.md line types:
-# Health.md's "one scalar value per line" shape has no natural place for
-# nested/multi-field data like "56% light sleep, 12% deep, 6% REM" or a
-# stress score's Low/Normal/Medium/High time breakdown.
-DATE_KEY_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
-
-
-def merge_health_detailed_records(existing_data, new_records):
-    """
-    Upserts per-day detailed health records into the HealthDetailed.json
-    store (see vault_files.HEALTH_DETAILED), keyed by date. Unlike
-    merge_health_lines (several independent typed entries per day in a
-    flat text file), each day here is a single JSON object - a re-import
-    for an already-known date REPLACES that whole day's record outright
-    (the newer import is assumed to be the more complete/correct one)
-    rather than deep-merging individual sub-fields, which would need to
-    guess whether a field's absence in the new data means "unchanged" or
-    "actually gone".
-
-    Returns (merged_data, stats) where stats is {"added": n, "updated": n,
-    "skipped": n} - "skipped" counts keys in new_records that aren't a
-    plausible YYYY-MM-DD date, or whose value isn't itself an object.
-    """
-    if not isinstance(existing_data, dict):
-        existing_data = {}
-    merged = dict(existing_data)
-    stats = {"added": 0, "updated": 0, "skipped": 0}
-
-    if not isinstance(new_records, dict):
-        return merged, stats
-
-    for date_key, record in new_records.items():
-        if not DATE_KEY_RE.match(str(date_key)) or not isinstance(record, dict):
-            stats["skipped"] += 1
-            continue
-        if date_key in merged:
-            stats["updated"] += 1
-        else:
-            stats["added"] += 1
-        merged[date_key] = record
-
-    return merged, stats
+    days = HEALTH_PERIOD_DAYS.get(period, HEALTH_PERIOD_DAYS["week"])
+    result = {}
+    for key, entry_type in _HEALTH_DASHBOARD_METRICS:
+        data, labels, last = _get_health_series(entry_type, limit=days)
+        result[key] = {"data": data, "labels": labels, "last": last}
+    return result
 
 
 def has_health_entry_for_date(entry_type, date_str):

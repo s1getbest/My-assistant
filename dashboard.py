@@ -21,12 +21,13 @@ from drive_service import (
     update_json_file_on_drive,
     get_today_tasks,
     get_sleep_chart_data,
-    get_mood_chart_data,
     get_steps_chart_data,
     get_heart_rate_chart_data,
     get_stress_chart_data,
     get_distance_chart_data,
     get_calories_chart_data,
+    get_health_dashboard_series,
+    HEALTH_PERIOD_DAYS,
     get_habit_completion_array,
     get_user_profile,
     get_monthly_expenses,
@@ -244,6 +245,31 @@ Tasks list:
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route('/api/health_series', methods=['GET'])
+def get_health_series_for_period():
+    """
+    Backs the Health tab's period toggle (week/month/year/5y/10y) - the
+    initial page load renders the "week" view server-side (unchanged, for
+    a fast first paint); switching periods afterwards calls this instead
+    of a full page reload, and the JS updates all six chart instances from
+    one response.
+    """
+    try:
+        init_data = request.headers.get('Authorization')
+        if not validate_telegram_data(init_data):
+            return jsonify({"success": False, "error": "Unauthorized"}), 403
+
+        period = request.args.get("period", "week")
+        if period not in HEALTH_PERIOD_DAYS:
+            period = "week"
+
+        series = get_health_dashboard_series(period)
+        return jsonify({"success": True, "period": period, "series": series})
+    except Exception as e:
+        logger.error(f"[Dashboard] get_health_series_for_period error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/')
 @require_dashboard_key
 def home():
@@ -277,12 +303,6 @@ def home():
     except Exception as e:
         logger.error(f"[Dashboard] Error getting sleep data: {e}")
         sleep_data, sleep_labels, last_sleep = [0], ["No data"], "—"
-
-    try:
-        mood_data, mood_labels, last_mood = get_mood_chart_data()
-    except Exception as e:
-        logger.error(f"[Dashboard] Error getting mood data: {e}")
-        mood_data, mood_labels, last_mood = [0], ["No data"], "—"
 
     try:
         steps_data, steps_labels, last_steps = get_steps_chart_data()
@@ -423,9 +443,6 @@ def home():
         sleep_data=sleep_data,
         sleep_labels=sleep_labels,
         last_sleep=last_sleep,
-        mood_data=mood_data,
-        mood_labels=mood_labels,
-        last_mood=last_mood,
         steps_data=steps_data,
         steps_labels=steps_labels,
         last_steps=last_steps,

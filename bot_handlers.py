@@ -1,6 +1,5 @@
 import re
 import json
-import time
 from datetime import datetime, timedelta
 import telebot
 from google.genai import types
@@ -25,8 +24,6 @@ from drive_service import (
     update_json_file_on_drive,
     add_user_xp,
     append_line_to_drive,
-    merge_health_lines,
-    merge_health_detailed_records,
 )
 from ai_pipeline import (
     apply_format_rule,
@@ -238,7 +235,6 @@ HELP_TEXT = """🧠 Твой личный второй мозг. Просто п
 /stress <1-10> — записать уровень стресса, например /stress 4
 /distance <км> — записать дистанцию, например /distance 5.4
 /calories <число> — записать калории, например /calories 2150
-/import_health — массовый импорт истории (сон/шаги/пульс/стресс/дистанция/калории, либо подробный JSON с часов) из файла или текста
 /health_report — ИИ-анализ всей накопленной истории здоровья: тренды, отклонения, рекомендации
 /journal <текст> — личный дневник/рефлексия (можно ответить на сообщение)
 /quiz — повторить карточки (Anki-стиль, есть и в мини-аппе)
@@ -370,124 +366,6 @@ def track_calories(message):
         bot.reply_to(message, f"Ошибка записи калорий: {e}")
 
 
-@bot.message_handler(commands=['import_health'])
-def handle_import_health(message):
-    """
-    Bulk-imports historical health data from a big pre-formatted block of
-    text - for backfilling data from before the bot tracked it (e.g. a
-    fitness-app export, reformatted by another AI session with a large
-    context window, then sent here as a file). Auto-detects which of two
-    formats it got:
-
-    - Plain Health.md lines (sleep/mood/steps/heart rate/stress/distance/
-      calories) - see ARCHITECTURE.md 8.17. Merged via
-      drive_service.merge_health_lines(), which reuses the exact same
-      _parse_health_line() the rest of Health.md already relies on.
-    - A JSON object (starts with "{") of richer per-day records - sleep
-      phases, HR range/HRV, stress distribution, calories goal vs actual -
-      see ARCHITECTURE.md 8.18. Merged into HealthDetailed.json via
-      merge_health_detailed_records().
-
-    Deliberately not AI-parsed here either way, same reasoning as
-    /update_schedule (university_schedule.py's module docstring):
-    historical numbers are exactly the kind of thing a parsing mistake is
-    costly and easy to miss, and both formats are trivial to produce
-    directly.
-
-    A Telegram command is always a plain text message, so a document has
-    to arrive as a separate message: upload the .txt file first (any
-    caption, or none), then reply to THAT message with `/import_health` as
-    plain text. This is the preferred path for anything long, since
-    Telegram caps a single text message around 4096 characters and a
-    month of daily entries can exceed that. Short imports can skip the
-    file entirely: put the data right after the command, or reply with
-    this command to a plain text message containing it.
-    """
-    if not is_me(message):
-        return
-    try:
-        raw_text = ""
-        doc = message.reply_to_message.document if message.reply_to_message else None
-        if doc:
-            # A transient timeout hitting Telegram's file-serving endpoint
-            # (seen in practice: HTTPSConnectionPool read timeout on a
-            # 3 KB file - clearly not a size/bandwidth issue, just a
-            # one-off network hiccup) shouldn't force the user to
-            # re-upload and re-reply from scratch. Same short-retry
-            # pattern already used for Drive reads/writes.
-            last_err = None
-            for attempt in range(3):
-                try:
-                    file_info = bot.get_file(doc.file_id)
-                    downloaded = bot.download_file(file_info.file_path)
-                    raw_text = downloaded.decode("utf-8", errors="replace")
-                    last_err = None
-                    break
-                except Exception as e:
-                    last_err = e
-                    logger.warning(f"[ImportHealth] Download attempt {attempt + 1}/3 failed: {e}")
-                    if attempt < 2:
-                        time.sleep(2)
-            if last_err:
-                raise last_err
-        else:
-            args = message.text.split(maxsplit=1)
-            raw_text = args[1].strip() if len(args) > 1 else ""
-            if not raw_text and message.reply_to_message:
-                raw_text = message.reply_to_message.text or message.reply_to_message.caption or ""
-
-        raw_text = raw_text.strip()
-        if not raw_text:
-            bot.reply_to(
-                message,
-                "Пришли файл отдельным сообщением, затем ответь на НЕГО командой "
-                "`/import_health` - либо, если данных немного, напиши их сразу после команды "
-                "или ответь этой командой на сообщение с текстом.\n\n"
-                "Два формата на выбор:\n\n"
-                "1) Простые ежедневные метрики — по одной записи на строку, как в самом Health.md:\n"
-                "```\n* 2026-08-01: 7.2\n* 2026-08-01: Steps 8423\n* 2026-08-01: HR 61\n"
-                "* 2026-08-01: Stress 4/10\n* 2026-08-01: Distance 5.4\n* 2026-08-01: Calories 2150\n```\n"
-                "Дата без метки = сон (часы). Порядок строк и даты не важны.\n\n"
-                "2) Подробные данные с часов (фазы сна, диапазон пульса, распределение стресса и т.п.) — "
-                "JSON, один объект на дату (формат — спроси отдельно).",
-                parse_mode="Markdown",
-            )
-            return
-
-        stats_holder = {}
-
-        if raw_text.startswith("{"):
-            # Detailed-data path (ARCHITECTURE.md 8.18): sleep phases, HR
-            # range/HRV, stress distribution, calories goal vs actual -
-            # data with nested/multi-field shape that doesn't fit
-            # Health.md's "one scalar per line" format at all.
-            try:
-                new_records = json.loads(raw_text)
-            except json.JSONDecodeError as e:
-                bot.reply_to(message, f"Похоже на JSON, но не парсится: {e}")
-                return
-
-            def mutate_detailed(current_data):
-                merged, stats = merge_health_detailed_records(current_data, new_records)
-                stats_holder.update(stats)
-                return merged
-
-            update_json_file_on_drive(vault_files.HEALTH_DETAILED, mutate_detailed, default_factory=dict)
-        else:
-            def mutate(current_content):
-                merged, stats = merge_health_lines(current_content, raw_text)
-                stats_holder.update(stats)
-                return merged
-
-            update_file_on_drive(vault_files.HEALTH, mutate)
-
-        stats = stats_holder
-        reply = f"✅ Импорт завершён: добавлено {stats.get('added', 0)}, обновлено {stats.get('updated', 0)}."
-        if stats.get("skipped"):
-            reply += f"\n⚠️ Не распознано (пропущено): {stats['skipped']} - проверь формат."
-        bot.reply_to(message, reply)
-    except Exception as e:
-        bot.reply_to(message, f"Ошибка импорта: {e}")
 
 
 @bot.message_handler(commands=['health_report'])
@@ -495,11 +373,14 @@ def handle_health_report(message):
     """
     AI-driven longitudinal analysis of accumulated health data - not
     today's numbers, but trends and deviations across everything logged
-    so far: Health.md's simple daily metrics plus HealthDetailed.json's
-    richer per-day records (sleep phases, HR range/HRV, stress
-    distribution, ...) once populated via /import_health. Uses
-    MODEL_COMPLEX since this needs actual reasoning over a real dataset,
-    not a one-line lookup.
+    so far: Health.md's simple daily metrics (via /sleep, /steps, /pulse,
+    /stress, /distance, /calories, or a plain message) plus
+    HealthDetailed.json's richer per-day records (sleep phases, HR
+    range/HRV, stress distribution, ...), if the user has populated that
+    file directly (no bulk-import command for it - a single-user vault,
+    edited by hand when needed, is simpler than maintaining an import
+    pipeline for occasional bulk backfills). Uses MODEL_COMPLEX since this
+    needs actual reasoning over a real dataset, not a one-line lookup.
 
     No truncation of the input yet - fine while HealthDetailed.json is
     small (weeks/months of history), but if it grows into years of daily
@@ -516,8 +397,8 @@ def handle_health_report(message):
         if not health_content.strip() and not detailed_data:
             bot.reply_to(
                 message,
-                "Пока нет данных для анализа. Сначала пришли историю через `/import_health`, "
-                "или начни вести показатели командами `/sleep`, `/steps`, `/pulse`, `/stress` и т.п.",
+                "Пока нет данных для анализа. Начни вести показатели командами `/sleep`, `/steps`, "
+                "`/pulse`, `/stress` и т.п. (или заполни `HealthDetailed.json` вручную в Drive).",
                 parse_mode="Markdown",
             )
             return
@@ -640,15 +521,14 @@ def handle_voice(message):
 Пользователь прислал голосовую запись в свой личный дневник (Journal).
 Внимательно прослушай аудиофайл и распознай глубокие размышления Павла.
 
-Act as an empathetic listener and coach. Respond with a short, supportive reply. At the very end of your response, add two tags: `[JOURNAL] transcript_or_faithful_summary`, containing a faithful transcript (or, if speech was unclear in places, a close paraphrase) of what the user actually said - this is the diary entry itself and gets saved verbatim, so do not shorten it into a generic summary - and `[MOOD] score/10`, where score is your assessment of their emotional state (1-10).
+Act as an empathetic listener and coach. Respond with a short, supportive reply. At the very end of your response, add a tag: `[JOURNAL] transcript_or_faithful_summary`, containing a faithful transcript (or, if speech was unclear in places, a close paraphrase) of what the user actually said - this is the diary entry itself and gets saved verbatim, so do not shorten it into a generic summary.
 
-Помимо тегов, начни свой живой поддерживающий ответ с [ОТВЕТ], чтобы отделить живой ответ от тегов.
+Помимо тега, начни свой живой поддерживающий ответ с [ОТВЕТ], чтобы отделить живой ответ от тега.
 
 Формат ответа:
 [ОТВЕТ]
 Твой ответ пользователю на русском языке
 [JOURNAL] Транскрипт или точный пересказ того, что сказал пользователь
-[MOOD] score/10
 """)
         else:
             extraction_rules = get_extraction_rules(today_str)
@@ -1105,8 +985,8 @@ def handle_journal_command(message):
 
         # Save the entry itself right away, independent of the AI call below -
         # the reflection the user actually wrote is the point of a journal,
-        # and it shouldn't be lost just because the mood-scoring AI call
-        # times out or the API key pool is temporarily exhausted.
+        # and it shouldn't be lost just because the AI call times out or
+        # the API key pool is temporarily exhausted.
         append_journal_entry(journal_text)
 
         status = StatusMessage(message, "📔 Читаю запись...")
@@ -1119,14 +999,13 @@ def handle_journal_command(message):
 Пользователь пишет личную рефлексию/дневник (journaling):
 "{journal_text}"
 
-Act as an empathetic listener and coach. Respond with a short, supportive reply. At the very end of your response, add a new tag: `[MOOD] score/10`, where score is your assessment of their emotional state (1-10).
+Act as an empathetic listener and coach. Respond with a short, supportive reply.
 
-Помимо тегов, начни свой живой поддерживающий ответ с [ОТВЕТ], чтобы отделить живой ответ от тегов.
+Начни свой живой поддерживающий ответ с [ОТВЕТ].
 
 Формат ответа:
 [ОТВЕТ]
 Твой ответ пользователю коуча на русском языке
-[MOOD] score/10
 """)
         response = key_manager.generate_content(
             model=config.MODEL_COMPLEX,

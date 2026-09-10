@@ -43,7 +43,7 @@ _ENTITY_INDEX_CATEGORY = {"media": "media", "person": "people", "project": "proj
 
 # === REGEX CONSTANTS ===
 TAG_LINE_RE = re.compile(
-    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|FINANCE|MEMORY|SCHEDULE|QUESTION|MOOD|JOURNAL|GOAL'
+    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|FINANCE|MEMORY|SCHEDULE|QUESTION|JOURNAL|GOAL'
     r'|STEPS|HEART_RATE|STRESS|DISTANCE|CALORIES|INBOX|NOTE|CARD|MEDIA|PERSON|PROJECT)\]\s*(.+)$',
     re.MULTILINE
 )
@@ -216,8 +216,8 @@ def append_journal_entry(text):
 
 def append_health_metric(label, payload):
     """
-    Shared handler for daily Health.md metrics beyond sleep/mood - used by
-    the [STEPS]/[HEART_RATE]/[STRESS] tags below AND directly by their
+    Shared handler for daily Health.md metrics beyond sleep - used by
+    the [STEPS]/[HEART_RATE]/[STRESS]/[DISTANCE]/[CALORIES] tags below AND directly by their
     equivalent Telegram commands (/steps, /pulse, /stress in
     bot_handlers.py), so a metric logged either way is stored identically.
 
@@ -462,10 +462,6 @@ def apply_gemini_tags(tags):
                 save_entity_note("project", name, {"status": status}, body)
                 if body:
                     agent_tutor_background(f"{name}: {body}", source="project")
-            elif tag_type == "MOOD":
-                today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
-                append_line_to_drive(vault_files.HEALTH, f"* {today_str}: Mood {payload}")
-                add_user_xp(5)
             elif tag_type == "JOURNAL":
                 # Voice journal entries (bot_handlers.py handle_voice): the
                 # model transcribes/paraphrases what was said into this tag

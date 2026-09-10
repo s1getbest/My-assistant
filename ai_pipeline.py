@@ -43,8 +43,8 @@ _ENTITY_INDEX_CATEGORY = {"media": "media", "person": "people", "project": "proj
 
 # === REGEX CONSTANTS ===
 TAG_LINE_RE = re.compile(
-    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|FINANCE|MEMORY|SCHEDULE|QUESTION|MOOD|JOURNAL|GOAL|INBOX|NOTE|CARD'
-    r'|MEDIA|PERSON|PROJECT)\]\s*(.+)$',
+    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|FINANCE|MEMORY|SCHEDULE|QUESTION|MOOD|JOURNAL|GOAL'
+    r'|STEPS|HEART_RATE|STRESS|INBOX|NOTE|CARD|MEDIA|PERSON|PROJECT)\]\s*(.+)$',
     re.MULTILINE
 )
 
@@ -115,6 +115,9 @@ def get_extraction_rules(today_str):
 [PERSON] Имя человека | relationship | что произошло/что запомнить
 [PROJECT] Название проекта | status | что произошло/цель
 [GOAL] Формулировка долгосрочной цели/устремления
+[STEPS] ГГГГ-ММ-ДД: количество шагов
+[HEART_RATE] ГГГГ-ММ-ДД: пульс (уд/мин)
+[STRESS] ГГГГ-ММ-ДД: уровень стресса 1-10
 
 Если пользователь просит удалить задачу, используй [TASK_DEL] и передай уникальный фрагмент текста для поиска.
 Если пользователь просит изменить задачу, используй [TASK_EDIT] в формате `старый_текст || новая_строка`.
@@ -140,6 +143,10 @@ def get_extraction_rules(today_str):
 
 Если пользователь формулирует долгосрочную личную цель или устремление НА БУДУЩЕЕ, а не отдельный именованный проект и не разовую задачу с датой (например "хочу выучить английский", "цель - привести здоровье в порядок", "в этом году хочу больше путешествовать") — используй [GOAL]. Отличие от [PROJECT]: у проекта есть конкретное название и он отслеживается как отдельная сущность со статусом; цель — более абстрактное устремление без такого трекинга.
 
+Если пользователь называет количество шагов за день — используй [STEPS] (только число).
+Если пользователь называет свой пульс (в покое, после тренировки и т.п.) — используй [HEART_RATE] (только число, уд/мин).
+Если пользователь называет уровень стресса — используй [STRESS] (число 1-10, если названо словами вроде "сильный стресс" без числа, оцени сам от 1 до 10).
+
 ВАЖНО: При сохранении Zettelkasten заметки, выводи [NOTE] Category | Rich text с [[wikilinks]] и #tags.
 Затем выводи ответ пользователю в [ОТВЕТ]. Текст в [ОТВЕТ] ДОЛЖЕН БЫТЬ ЧИСТЫМ. НЕ ставь НИКАКИХ [[wikilinks]], #tags или **bold** в секции [ОТВЕТ]. Просто напиши что-то естественное вроде "Я записал этот факт в базу знаний".
 
@@ -158,6 +165,9 @@ def get_extraction_rules(today_str):
 - "познакомился сегодня с Иваном на дне рождения у Маши" → [PERSON] Иван | acquaintance | Познакомились на дне рождения у Маши
 - "начал делать диплом про нейросети, дедлайн в июне" → [PROJECT] Диплом | active | Тема: нейросети, дедлайн июнь
 - "моя цель на этот год - выучить английский до уровня B2" → [GOAL] Выучить английский до уровня B2 к концу года
+- "сегодня прошёл 9500 шагов" → [STEPS] {today_str}: 9500
+- "пульс в покое сегодня утром 58" → [HEART_RATE] {today_str}: 58
+- "уровень стресса сегодня где-то 6 из 10" → [STRESS] {today_str}: 6
 """
 
 
@@ -196,6 +206,34 @@ def append_journal_entry(text):
         return
     today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
     append_line_to_drive(vault_files.JOURNAL, f"* {today_str}: {text}")
+
+
+def append_health_metric(label, payload):
+    """
+    Shared handler for daily Health.md metrics beyond sleep/mood - used by
+    the [STEPS]/[HEART_RATE]/[STRESS] tags below AND directly by their
+    equivalent Telegram commands (/steps, /pulse, /stress in
+    bot_handlers.py), so a metric logged either way is stored identically.
+
+    `payload` is "YYYY-MM-DD: value" - the same date-prefixed shape as
+    [HEALTH]/[FINANCE] - so a backdated mention ("вчера прошёл 8000 шагов")
+    still lands on the right day; the commands build this payload from
+    today's date themselves. `label` gets injected right after the date so
+    drive_service._parse_health_line can tell this metric apart from sleep
+    hours and the others sharing Health.md (see _HEALTH_LABELED_TYPES
+    there - the label here must match, case-insensitively, the key
+    registered there). A malformed payload (no ":") is dropped rather than
+    written as a garbled line.
+
+    Awards the same +5 XP as /sleep and [HEALTH] - logging any of these
+    daily metrics is the same kind of small, consistent habit.
+    """
+    if ":" not in payload:
+        logger.warning(f"[Tag Apply] Malformed {label} payload (missing date): {payload!r}")
+        return
+    date_part, value_part = payload.split(":", 1)
+    append_line_to_drive(vault_files.HEALTH, f"* {date_part.strip()}: {label} {value_part.strip()}")
+    add_user_xp(5)
 
 
 def append_goal(text):
@@ -434,6 +472,12 @@ def apply_gemini_tags(tags):
                 append_journal_entry(payload)
             elif tag_type == "GOAL":
                 append_goal(payload)
+            elif tag_type == "STEPS":
+                append_health_metric("Steps", payload)
+            elif tag_type == "HEART_RATE":
+                append_health_metric("HR", payload)
+            elif tag_type == "STRESS":
+                append_health_metric("Stress", payload)
             elif tag_type == "SCHEDULE" and "|" in payload:
                 dt_str, task_text = payload.split("|", 1)
                 dt_str, task_text = dt_str.strip(), task_text.strip()

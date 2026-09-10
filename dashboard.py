@@ -22,6 +22,9 @@ from drive_service import (
     get_today_tasks,
     get_sleep_chart_data,
     get_mood_chart_data,
+    get_steps_chart_data,
+    get_heart_rate_chart_data,
+    get_stress_chart_data,
     get_habit_completion_array,
     get_user_profile,
     get_monthly_expenses,
@@ -280,6 +283,24 @@ def home():
         mood_data, mood_labels, last_mood = [0], ["No data"], "—"
 
     try:
+        steps_data, steps_labels, last_steps = get_steps_chart_data()
+    except Exception as e:
+        logger.error(f"[Dashboard] Error getting steps data: {e}")
+        steps_data, steps_labels, last_steps = [0], ["No data"], "—"
+
+    try:
+        hr_data, hr_labels, last_hr = get_heart_rate_chart_data()
+    except Exception as e:
+        logger.error(f"[Dashboard] Error getting heart rate data: {e}")
+        hr_data, hr_labels, last_hr = [0], ["No data"], "—"
+
+    try:
+        stress_data, stress_labels, last_stress = get_stress_chart_data()
+    except Exception as e:
+        logger.error(f"[Dashboard] Error getting stress data: {e}")
+        stress_data, stress_labels, last_stress = [0], ["No data"], "—"
+
+    try:
         habit_data = get_habit_completion_array()
         if not habit_data:
             raise ValueError("Empty habit completion array")
@@ -391,6 +412,15 @@ def home():
         mood_data=mood_data,
         mood_labels=mood_labels,
         last_mood=last_mood,
+        steps_data=steps_data,
+        steps_labels=steps_labels,
+        last_steps=last_steps,
+        hr_data=hr_data,
+        hr_labels=hr_labels,
+        last_hr=last_hr,
+        stress_data=stress_data,
+        stress_labels=stress_labels,
+        last_stress=last_stress,
         habit_data=habit_data,
         welcome_msg=welcome_msg,
         profile=profile,

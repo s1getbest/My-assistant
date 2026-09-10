@@ -585,26 +585,43 @@ def get_monthly_expenses():
         return 0, []
 
 
+# Health.md mixes several kinds of entries, all written as
+# "* YYYY-MM-DD: <label> <value>" - each key here is the label (matched
+# case-insensitively at the start of the value part), mapped to the
+# entry_type _parse_health_line returns for it. Sleep hours are the
+# exception: no label at all ("* YYYY-MM-DD: 7.5"), for backwards
+# compatibility with every sleep entry ever written before other metrics
+# existed - handled as the fallback in _parse_health_line, not listed here.
+_HEALTH_LABELED_TYPES = {
+    "mood": "mood",
+    "steps": "steps",
+    "hr": "heart_rate",
+    "stress": "stress",
+}
+
+
 def _parse_health_line(line):
     """
-    Health.md mixes two kinds of entries written by different features -
-    "* YYYY-MM-DD: 7.5" (sleep hours, from /sleep or the [HEALTH] tag) and
-    "* YYYY-MM-DD: Mood 8/10" (from /journal or a voice journal entry's
-    [MOOD] tag) - interleaved by date, not separated into different
-    sections. Returns (date_part, entry_type, value) where entry_type is
-    "sleep" or "mood", or None if the line doesn't match either shape.
+    Returns (date_part, entry_type, value) for one Health.md line, where
+    entry_type is one of "sleep"/"mood"/"steps"/"heart_rate"/"stress", or
+    None if the line doesn't match any recognized shape. A trailing
+    "/N" (as in "Mood 8/10" or "Stress 3/10") is stripped before parsing
+    the number, so labels that use a fixed 1-10 scale don't need any
+    special-casing here.
     """
     line = line.strip()
     if not line or ":" not in line:
         return None
     date_part = line.split(":", 1)[0].replace("*", "").strip()
     val_part = line.split(":", 1)[1].strip()
-    if val_part.lower().startswith("mood"):
-        score_str = val_part[4:].strip().split("/")[0].strip()
-        try:
-            return date_part, "mood", float(score_str.replace(",", "."))
-        except ValueError:
-            return None
+    lowered = val_part.lower()
+    for label, entry_type in _HEALTH_LABELED_TYPES.items():
+        if lowered.startswith(label):
+            score_str = val_part[len(label):].strip().split("/")[0].strip()
+            try:
+                return date_part, entry_type, float(score_str.replace(",", "."))
+            except ValueError:
+                return None
     try:
         return date_part, "sleep", float(val_part.replace(",", "."))
     except ValueError:
@@ -614,9 +631,9 @@ def _parse_health_line(line):
 def _get_health_series(entry_type, limit=7):
     """
     Returns (values, labels, last_value_str) for the last `limit` entries
-    of the given type ("sleep"/"mood") in Health.md, in chronological
-    order - filtering by type first, unlike a naive "last N lines" which
-    would mix sleep and mood entries together (see _parse_health_line).
+    of the given type in Health.md, in chronological order - filtering by
+    type first, unlike a naive "last N lines" which would mix different
+    entry types together (see _parse_health_line).
     """
     values, labels = [], []
     last_value_str = "—"
@@ -648,10 +665,23 @@ def get_mood_chart_data():
     return _get_health_series("mood")
 
 
+def get_steps_chart_data():
+    return _get_health_series("steps")
+
+
+def get_heart_rate_chart_data():
+    return _get_health_series("heart_rate")
+
+
+def get_stress_chart_data():
+    return _get_health_series("stress")
+
+
 def has_health_entry_for_date(entry_type, date_str):
     """
-    True if Health.md has an entry of the given type ("sleep"/"mood") for
-    date_str (YYYY-MM-DD). Used by scheduler_jobs.check_daily_sleep()
+    True if Health.md has an entry of the given type (see
+    _HEALTH_LABELED_TYPES, plus "sleep") for date_str (YYYY-MM-DD). Used by
+    scheduler_jobs.check_daily_sleep()
     instead of a naive `date_str in health_content` substring check - which
     would wrongly count a same-day *mood* entry (e.g. from an early
     /journal) as "sleep logged", since both entry types' lines start with

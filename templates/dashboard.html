@@ -180,11 +180,65 @@
                     <p class="text-2xl font-extrabold text-fuchsia-300 mt-1" id="avgMood">—</p>
                 </div>
             </div>
-            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
                 <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🎭 Тренд настроения</h2>
                 <p class="text-[11px] text-slate-500 mb-3">По записям из /journal и голосовых дневников.</p>
                 <div class="h-44">
                     <canvas id="moodChart"></canvas>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Шаги</p>
+                    <p class="text-2xl font-extrabold text-emerald-400 mt-1">{{ last_steps }}</p>
+                </div>
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (7д)</p>
+                    <p class="text-2xl font-extrabold text-emerald-300 mt-1" id="avgSteps">—</p>
+                </div>
+            </div>
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🚶 Тренд шагов</h2>
+                <p class="text-[11px] text-slate-500 mb-3">Из /steps или обычного сообщения ("прошёл 9000 шагов").</p>
+                <div class="h-44">
+                    <canvas id="stepsChart"></canvas>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Пульс</p>
+                    <p class="text-2xl font-extrabold text-rose-400 mt-1">{{ last_hr }} <span class="text-sm">уд/мин</span></p>
+                </div>
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (7д)</p>
+                    <p class="text-2xl font-extrabold text-rose-300 mt-1" id="avgHr">—</p>
+                </div>
+            </div>
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">❤️ Тренд пульса</h2>
+                <p class="text-[11px] text-slate-500 mb-3">Из /pulse или обычного сообщения ("пульс в покое 58").</p>
+                <div class="h-44">
+                    <canvas id="hrChart"></canvas>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Стресс</p>
+                    <p class="text-2xl font-extrabold text-amber-400 mt-1">{{ last_stress }} <span class="text-sm">/10</span></p>
+                </div>
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (7д)</p>
+                    <p class="text-2xl font-extrabold text-amber-300 mt-1" id="avgStress">—</p>
+                </div>
+            </div>
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🧘 Тренд стресса</h2>
+                <p class="text-[11px] text-slate-500 mb-3">Из /stress или обычного сообщения ("уровень стресса 6 из 10").</p>
+                <div class="h-44">
+                    <canvas id="stressChart"></canvas>
                 </div>
             </div>
         </div>
@@ -334,6 +388,9 @@
         const TABS = ['overview', 'tasks', 'health', 'study', 'finance'];
         let chartInstance = null;
         let moodChartInstance = null;
+        let stepsChartInstance = null;
+        let hrChartInstance = null;
+        let stressChartInstance = null;
         let financeChartInstance = null;
         let currentFlashcard = null;
 
@@ -348,6 +405,9 @@
             });
             if (name === 'health' && !chartInstance) initChart();
             if (name === 'health' && !moodChartInstance) initMoodChart();
+            if (name === 'health' && !stepsChartInstance) initStepsChart();
+            if (name === 'health' && !hrChartInstance) initHrChart();
+            if (name === 'health' && !stressChartInstance) initStressChart();
             if (name === 'study') loadFlashcard();
             if (name === 'finance' && !financeChartInstance) initFinanceChart();
         }
@@ -604,6 +664,77 @@
                     },
                 },
             });
+        }
+
+        function initMetricChart(canvasId, avgElId, avgSuffix, avgDecimals, data, labels, lineColor, glowRgb, yMax) {
+            // Shared line-chart renderer for the steps/heart-rate/stress
+            // tiles - same neon-gradient style as initChart()/initMoodChart()
+            // above, just parameterized instead of copy-pasted three more
+            // times with only the color/scale/decimals differing.
+            // glowRgb is a bare "r, g, b" triplet so the two gradient stops
+            // (35% and 0% alpha) can be built directly, without any
+            // string-surgery on a pre-built rgba() value.
+            const valid = data.filter(v => v > 0);
+            if (valid.length) {
+                const avg = (valid.reduce((a, b) => a + b, 0) / valid.length).toFixed(avgDecimals);
+                document.getElementById(avgElId).textContent = avg + avgSuffix;
+            }
+
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            const gradient = ctx.createLinearGradient(0, 0, 0, 176);
+            gradient.addColorStop(0, `rgba(${glowRgb}, 0.35)`);
+            gradient.addColorStop(1, `rgba(${glowRgb}, 0)`);
+
+            return new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: data,
+                        borderColor: lineColor,
+                        backgroundColor: gradient,
+                        tension: 0.4,
+                        fill: true,
+                        borderWidth: 2.5,
+                        pointBackgroundColor: lineColor,
+                        pointBorderColor: lineColor,
+                        pointBorderWidth: 2,
+                        pointRadius: 4,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 9 } } },
+                        y: {
+                            min: 0,
+                            ...(yMax ? { max: yMax } : {}),
+                            grid: { color: 'rgba(148, 163, 184, 0.08)' },
+                            ticks: { color: '#94a3b8', font: { size: 9 } },
+                        },
+                    },
+                },
+            });
+        }
+
+        function initStepsChart() {
+            const data = {{ steps_data|tojson }};
+            const labels = {{ steps_labels|tojson }};
+            stepsChartInstance = initMetricChart('stepsChart', 'avgSteps', '', 0, data, labels, '#34d399', '52, 211, 153', null);
+        }
+
+        function initHrChart() {
+            const data = {{ hr_data|tojson }};
+            const labels = {{ hr_labels|tojson }};
+            hrChartInstance = initMetricChart('hrChart', 'avgHr', ' уд/мин', 0, data, labels, '#fb7185', '251, 113, 133', null);
+        }
+
+        function initStressChart() {
+            const data = {{ stress_data|tojson }};
+            const labels = {{ stress_labels|tojson }};
+            stressChartInstance = initMetricChart('stressChart', 'avgStress', ' /10', 1, data, labels, '#fbbf24', '251, 191, 36', 10);
         }
 
         function initFinanceChart() {

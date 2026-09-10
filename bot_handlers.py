@@ -34,6 +34,7 @@ from ai_pipeline import (
     get_extraction_rules,
     extract_task_text_from_line,
     append_journal_entry,
+    append_health_metric,
 )
 
 logger = get_logger(__name__)
@@ -228,6 +229,9 @@ HELP_TEXT = """🧠 Твой личный второй мозг. Просто п
 
 Команды:
 /sleep <часы> — записать сон, например /sleep 7.5
+/steps <число> — записать шаги за день, например /steps 9500
+/pulse <уд/мин> — записать пульс, например /pulse 62
+/stress <1-10> — записать уровень стресса, например /stress 4
 /journal <текст> — личный дневник/рефлексия (можно ответить на сообщение)
 /quiz — повторить карточки (Anki-стиль, есть и в мини-аппе)
 /who <имя> — карточка человека/медиа/проекта прямо в чат
@@ -266,6 +270,60 @@ def track_sleep(message):
         bot.reply_to(message, f"🛌 **Сон записан!** (+5 XP)\n\n> {today_str} · {hours} ч.")
     except Exception as e:
         bot.reply_to(message, f"Ошибка записи сна: {e}")
+
+
+@bot.message_handler(commands=['steps'])
+def track_steps(message):
+    if not is_me(message):
+        return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "Укажи количество шагов. Пример: `/steps 9500`", parse_mode="Markdown")
+            return
+        steps = args[1]
+        today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+        append_health_metric("Steps", f"{today_str}: {steps}")
+        bot.reply_to(message, f"🚶 **Шаги записаны!** (+5 XP)\n\n> {today_str} · {steps} шагов")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка записи шагов: {e}")
+
+
+@bot.message_handler(commands=['pulse'])
+def track_pulse(message):
+    if not is_me(message):
+        return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "Укажи пульс (уд/мин). Пример: `/pulse 62`", parse_mode="Markdown")
+            return
+        bpm = args[1]
+        today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+        append_health_metric("HR", f"{today_str}: {bpm}")
+        bot.reply_to(message, f"❤️ **Пульс записан!** (+5 XP)\n\n> {today_str} · {bpm} уд/мин")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка записи пульса: {e}")
+
+
+@bot.message_handler(commands=['stress'])
+def track_stress(message):
+    if not is_me(message):
+        return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "Укажи уровень стресса 1-10. Пример: `/stress 4`", parse_mode="Markdown")
+            return
+        level = args[1]
+        today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+        append_health_metric("Stress", f"{today_str}: {level}")
+        bot.reply_to(message, f"🧘 **Стресс записан!** (+5 XP)\n\n> {today_str} · {level}/10")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка записи стресса: {e}")
 
 
 def _send_next_due_flashcard(chat_id):

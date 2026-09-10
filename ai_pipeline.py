@@ -32,6 +32,7 @@ from drive_service import (
     update_json_file_on_drive,
     get_folder_id,
     add_user_xp,
+    DEFAULT_GOALS_CONTENT,
 )
 
 logger = get_logger(__name__)
@@ -42,7 +43,7 @@ _ENTITY_INDEX_CATEGORY = {"media": "media", "person": "people", "project": "proj
 
 # === REGEX CONSTANTS ===
 TAG_LINE_RE = re.compile(
-    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|FINANCE|MEMORY|SCHEDULE|QUESTION|MOOD|JOURNAL|INBOX|NOTE|CARD'
+    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|FINANCE|MEMORY|SCHEDULE|QUESTION|MOOD|JOURNAL|GOAL|INBOX|NOTE|CARD'
     r'|MEDIA|PERSON|PROJECT)\]\s*(.+)$',
     re.MULTILINE
 )
@@ -113,6 +114,7 @@ def get_extraction_rules(today_str):
 [MEDIA] Точное название | category | status | rating | впечатления
 [PERSON] Имя человека | relationship | что произошло/что запомнить
 [PROJECT] Название проекта | status | что произошло/цель
+[GOAL] Формулировка долгосрочной цели/устремления
 
 Если пользователь просит удалить задачу, используй [TASK_DEL] и передай уникальный фрагмент текста для поиска.
 Если пользователь просит изменить задачу, используй [TASK_EDIT] в формате `старый_текст || новая_строка`.
@@ -136,6 +138,8 @@ def get_extraction_rules(today_str):
   - status — ТОЛЬКО одно из: active, paused, done.
   - Название проекта указывай одинаково при повторных упоминаниях.
 
+Если пользователь формулирует долгосрочную личную цель или устремление НА БУДУЩЕЕ, а не отдельный именованный проект и не разовую задачу с датой (например "хочу выучить английский", "цель - привести здоровье в порядок", "в этом году хочу больше путешествовать") — используй [GOAL]. Отличие от [PROJECT]: у проекта есть конкретное название и он отслеживается как отдельная сущность со статусом; цель — более абстрактное устремление без такого трекинга.
+
 ВАЖНО: При сохранении Zettelkasten заметки, выводи [NOTE] Category | Rich text с [[wikilinks]] и #tags.
 Затем выводи ответ пользователю в [ОТВЕТ]. Текст в [ОТВЕТ] ДОЛЖЕН БЫТЬ ЧИСТЫМ. НЕ ставь НИКАКИХ [[wikilinks]], #tags или **bold** в секции [ОТВЕТ]. Просто напиши что-то естественное вроде "Я записал этот факт в базу знаний".
 
@@ -153,6 +157,7 @@ def get_extraction_rules(today_str):
 - "начал смотреть Во все тяжкие" → [MEDIA] Во все тяжкие | series | watching | | Только начал смотреть
 - "познакомился сегодня с Иваном на дне рождения у Маши" → [PERSON] Иван | acquaintance | Познакомились на дне рождения у Маши
 - "начал делать диплом про нейросети, дедлайн в июне" → [PROJECT] Диплом | active | Тема: нейросети, дедлайн июнь
+- "моя цель на этот год - выучить английский до уровня B2" → [GOAL] Выучить английский до уровня B2 к концу года
 """
 
 
@@ -191,6 +196,34 @@ def append_journal_entry(text):
         return
     today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
     append_line_to_drive(vault_files.JOURNAL, f"* {today_str}: {text}")
+
+
+def append_goal(text):
+    """
+    Appends a new long-term goal to Goals.md via the [GOAL] tag.
+
+    Before this, there was no way to ever populate Goals.md except editing
+    it directly in Drive: drive_service.read_or_create_goals() seeds it
+    once with a generic placeholder (DEFAULT_GOALS_CONTENT), and both the
+    morning briefing (scheduler_jobs.py) and /brain (bot_handlers.py) treat
+    whatever is in the file as the user's real long-term goals - which,
+    until now, could only ever be that placeholder.
+
+    A real first goal replaces the placeholder outright rather than
+    appending underneath it, since generic filler nobody actually asked for
+    ("Улучшить здоровье и сон", ...) shouldn't sit alongside - and get
+    equal weight to - a goal the user actually stated.
+    """
+    text = (text or "").strip()
+    if not text:
+        return
+
+    def mutate(current):
+        if not current.strip() or current.strip() == DEFAULT_GOALS_CONTENT.strip():
+            return f"# Мои долгосрочные цели\n\n* {text}"
+        return f"{current.rstrip()}\n* {text}"
+
+    update_file_on_drive(vault_files.GOALS, mutate)
 
 
 def save_entity_note(entity_type, name, extra_fields, body):
@@ -399,6 +432,8 @@ def apply_gemini_tags(tags):
                 # which both paths funnel through so entries look identical
                 # in Journal.md regardless of source.
                 append_journal_entry(payload)
+            elif tag_type == "GOAL":
+                append_goal(payload)
             elif tag_type == "SCHEDULE" and "|" in payload:
                 dt_str, task_text = payload.split("|", 1)
                 dt_str, task_text = dt_str.strip(), task_text.strip()

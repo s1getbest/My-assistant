@@ -774,13 +774,21 @@ def get_habit_completion_array():
     return habit_data
 
 
+# Seeded into Goals.md the first time it's ever read, before the user has
+# stated any real goal. Exposed here (rather than inlined below) so
+# ai_pipeline.append_goal() can recognize it and replace it outright once a
+# real goal comes in, instead of leaving this generic filler sitting
+# alongside (and getting equal weight to) an actual stated goal forever.
+DEFAULT_GOALS_CONTENT = "# Мои долгосрочные цели\n\n* Улучшить здоровье и сон\n* Вести учет финансов\n* Повысить продуктивность"
+
+
 def read_or_create_goals():
     """
     Reads Goals.md from drive. If it doesn't exist, creates it with a default template.
     """
     content = read_file_from_drive(vault_files.GOALS)
     if not content.strip():
-        content = "# Мои долгосрочные цели\n\n* Улучшить здоровье и сон\n* Вести учет финансов\n* Повысить продуктивность"
+        content = DEFAULT_GOALS_CONTENT
         write_file_to_drive(vault_files.GOALS, content)
     return content
 

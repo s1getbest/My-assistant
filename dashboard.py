@@ -31,6 +31,21 @@ from drive_service import (
 
 logger = get_logger(__name__)
 
+
+def _ru_days_label(n):
+    """Correct Russian pluralization for 'день'/'дня'/'дней' - the naive
+    n < 5 check breaks on 11-14 (which take 'дней', not 'дня', despite
+    ending in 1-4)."""
+    if 11 <= n % 100 <= 14:
+        word = "дней"
+    elif n % 10 == 1:
+        word = "день"
+    elif 2 <= n % 10 <= 4:
+        word = "дня"
+    else:
+        word = "дней"
+    return f"{n} {word} подряд"
+
 # Initialize Flask Mini App
 app = Flask(__name__)
 
@@ -242,6 +257,7 @@ def home():
     finance_total = 0
     finance_recent = []
     finance_by_category = {}
+    habit_streak = 0
 
     # Fetch with individual try-except blocks
     try:
@@ -273,6 +289,19 @@ def home():
                 "done": 0,
                 "completed": False
             })
+
+    # Current streak: consecutive completed days counting back from
+    # yesterday (habit_data is chronological, oldest first - see
+    # get_habit_completion_array), plus today if it's already done too.
+    # Today is checked separately so an in-progress day (habits not done
+    # *yet*, since the day isn't over) doesn't zero out an existing streak -
+    # same convention as most habit trackers.
+    for day in reversed(habit_data[:-1]):
+        if not day.get("completed"):
+            break
+        habit_streak += 1
+    if habit_data and habit_data[-1].get("completed"):
+        habit_streak += 1
 
     try:
         profile = get_user_profile()
@@ -361,6 +390,7 @@ def home():
         finance_total=finance_total,
         finance_recent=finance_recent,
         finance_by_category=finance_by_category,
+        habit_streak_label=_ru_days_label(habit_streak) if habit_streak > 0 else "",
     )
 
 

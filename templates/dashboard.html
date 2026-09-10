@@ -81,7 +81,12 @@
 
             <!-- Habit Heatmap Card -->
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🔥 Календарь привычек</h2>
+                <div class="flex items-center justify-between mb-3">
+                    <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider">🔥 Календарь привычек</h2>
+                    {% if habit_streak_label %}
+                    <span class="text-[10px] font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full">{{ habit_streak_label }}</span>
+                    {% endif %}
+                </div>
                 <p class="text-[11px] text-slate-500 mb-4">Зеленым отмечены дни, когда вы выполнили более 50% рутинных задач.</p>
                 <div class="grid grid-cols-7 gap-2">
                     {% for day in habit_data %}

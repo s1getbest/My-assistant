@@ -324,6 +324,11 @@ def apply_gemini_tags(tags):
                 append_line_to_drive(vault_files.FINANCE, f"* {payload}")
             elif tag_type == "HEALTH":
                 append_line_to_drive(vault_files.HEALTH, f"* {payload}")
+                # Same +5 XP as the explicit /sleep command (bot_handlers.py) -
+                # this tag is how the exact same sleep-hours entry gets
+                # recorded when typed as a natural message instead of the
+                # command, and the two shouldn't be rewarded differently.
+                add_user_xp(5)
             elif tag_type == "MEMORY":
                 append_line_to_drive(vault_files.MEMORY, f"* {payload}")
             elif tag_type == "QUESTION":

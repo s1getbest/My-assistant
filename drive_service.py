@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timedelta
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 import config
 import vault_files
@@ -171,6 +172,34 @@ def get_folder_id(folder_name):
     return _FOLDER_IDS.get(folder_name)
 
 
+def _is_missing_file_error(exc):
+    # Google Drive returns 404 when a create/update targets a parent folder
+    # ID that no longer exists - e.g. the user deleted a PARA folder (and
+    # everything in it) directly in Drive, bypassing the bot entirely. Our
+    # in-memory _FOLDER_IDS cache (set once at process startup) has no way
+    # to know that happened on its own.
+    return getattr(getattr(exc, 'resp', None), 'status', None) == 404
+
+
+def _refresh_stale_folder(stale_folder_id):
+    """
+    If stale_folder_id is one of our tracked PARA folder IDs, re-resolve
+    that folder by name - recreating it on Drive if it's gone - and update
+    the cache so every future lookup (and the caller's retry) picks up the
+    fresh ID. Returns the fresh ID, or None if stale_folder_id isn't one of
+    ours or the recreation attempt itself failed.
+    """
+    with _FOLDER_LOCK:
+        folder_name = next((name for name, fid in _FOLDER_IDS.items() if fid == stale_folder_id), None)
+        if folder_name is None:
+            return None
+        fresh_id = _get_or_create_folder(folder_name)
+        _FOLDER_IDS[folder_name] = fresh_id
+        if fresh_id:
+            logger.warning(f"[Drive] Folder '{folder_name}' (ID: {stale_folder_id}) was missing - recreated as {fresh_id}.")
+        return fresh_id
+
+
 def _cache_key(filename, folder_id):
     # Filenames are only unique within a folder (e.g. a Media note and a
     # Person note could coincidentally share a name) - keying the cache on
@@ -257,6 +286,14 @@ def write_file_to_drive(filename, content, folder_id=None):
             return
         except Exception as e:
             last_err = e
+            # A PARA folder deleted directly in Drive (not through the bot)
+            # leaves target_folder_id pointing at nothing - recreate it and
+            # retry immediately instead of failing every write until the
+            # process happens to restart.
+            if _is_missing_file_error(e):
+                fresh_id = _refresh_stale_folder(target_folder_id)
+                if fresh_id:
+                    folder_id = fresh_id
             logger.warning(f"[Drive] Write error for {filename} (attempt {attempt + 1}/3): {e}")
             if attempt < 2:
                 time.sleep(1)

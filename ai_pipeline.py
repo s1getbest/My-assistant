@@ -42,7 +42,7 @@ _ENTITY_INDEX_CATEGORY = {"media": "media", "person": "people", "project": "proj
 
 # === REGEX CONSTANTS ===
 TAG_LINE_RE = re.compile(
-    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|MEMORY|SCHEDULE|QUESTION|MOOD|INBOX|NOTE|CARD'
+    r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|FINANCE|MEMORY|SCHEDULE|QUESTION|MOOD|INBOX|NOTE|CARD'
     r'|MEDIA|PERSON|PROJECT)\]\s*(.+)$',
     re.MULTILINE
 )
@@ -103,6 +103,7 @@ def get_extraction_rules(today_str):
 [TASK_DEL] text_to_find
 [TASK_EDIT] text_to_find || ГГГГ-ММ-ДД ЧЧ:ММ | Новое описание задачи
 [HEALTH] ГГГГ-ММ-ДД: часы
+[FINANCE] ГГГГ-ММ-ДД: сумма | категория | описание
 [MEMORY] факт для долгосрочной памяти
 [SCHEDULE] ГГГГ-ММ-ДД ЧЧ:ММ | Текст напоминания
 [INBOX] сырой текст мысли или заметки
@@ -119,6 +120,7 @@ def get_extraction_rules(today_str):
 Если пользователь просто выгружает мысли, идеи, наблюдения или факты без явного действия, используй [INBOX].
 Если это атомарная заметка для Второго Мозга, используй [NOTE] и автоматически оборачивай ключевые сущности, концепты и имена в [[wikilinks]], а также добавляй релевантные #tags.
 Если можно сформулировать учебную карточку вопрос-ответ, используй [CARD].
+Если пользователь упоминает трату денег (купил, заплатил, потратил) или прислал фото чека, используй [FINANCE] с суммой в рублях (только число, без "руб"/"₽"), краткой категорией (Еда, Транспорт, Развлечения и т.п.) и коротким описанием.
 
 Если сообщение про фильм/аниме/сериал/книгу/игру (посмотрел, смотрю, бросил, оценка), используй [MEDIA].
   - category — ТОЛЬКО одно из: anime, movie, series, book, game.
@@ -146,6 +148,7 @@ def get_extraction_rules(today_str):
 - "идея: сделать метод для сравнения привычек" → [INBOX] идея: сделать метод для сравнения привычек
 - "концепт atomic habits помогает строить систему" → [NOTE] Productivity | [[Atomic Habits]] помогает строить систему #productivity #habits
 - "что такое Zettelkasten? | система связанных атомарных заметок" → [CARD] Что такое Zettelkasten? | Система связанных атомарных заметок
+- "купил продукты на 1500 рублей" → [FINANCE] {today_str}: 1500 | Еда | Продукты
 - "посмотрел атаку титанов, очень понравилось, 9 из 10" → [MEDIA] Атака Титанов | anime | watched | 9 | Очень понравилось
 - "начал смотреть Во все тяжкие" → [MEDIA] Во все тяжкие | series | watching | | Только начал смотреть
 - "познакомился сегодня с Иваном на дне рождения у Маши" → [PERSON] Иван | acquaintance | Познакомились на дне рождения у Маши

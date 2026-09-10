@@ -23,6 +23,8 @@ from drive_service import (
     get_sleep_chart_data,
     get_habit_completion_array,
     get_user_profile,
+    get_monthly_expenses,
+    get_expenses_by_category,
     add_user_xp,
     initialize_folder_mapping,
 )
@@ -237,6 +239,9 @@ def home():
     flashcard_stats = {"total": 0, "due": 0}
     today_classes = []
     brain_stats = {"people": 0, "projects": 0, "media": 0, "tags": 0}
+    finance_total = 0
+    finance_recent = []
+    finance_by_category = {}
 
     # Fetch with individual try-except blocks
     try:
@@ -301,6 +306,13 @@ def home():
         today_classes = []
 
     try:
+        finance_total, finance_recent = get_monthly_expenses()
+        finance_by_category = get_expenses_by_category()
+    except Exception as e:
+        logger.error(f"[Dashboard] Error getting finance data: {e}")
+        finance_total, finance_recent, finance_by_category = 0, [], {}
+
+    try:
         # Index.json only stores name/title + file path per entity (not
         # status/rating - those live in the note's own frontmatter), so
         # these are plain counts, not a "currently watching" breakdown -
@@ -346,6 +358,9 @@ def home():
         flashcard_stats=flashcard_stats,
         today_classes=today_classes,
         brain_stats=brain_stats,
+        finance_total=finance_total,
+        finance_recent=finance_recent,
+        finance_by_category=finance_by_category,
     )
 
 

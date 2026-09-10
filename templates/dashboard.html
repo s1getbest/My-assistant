@@ -232,29 +232,70 @@
             </div>
         </div>
 
+        <!-- TAB 4: FINANCE -->
+        <div id="tab-finance" class="tab-panel hidden">
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
+                <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Траты в этом месяце</p>
+                <p class="text-3xl font-extrabold text-rose-400 mt-1">{{ "{:,}".format(finance_total).replace(",", " ") }} <span class="text-sm">₽</span></p>
+            </div>
+
+            {% if finance_by_category %}
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">📊 По категориям</h2>
+                <div class="h-48">
+                    <canvas id="financeChart"></canvas>
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🧾 Последние траты</h2>
+                {% if finance_recent %}
+                <div class="space-y-2">
+                    {% for tx in finance_recent %}
+                    <div class="flex items-center justify-between gap-3 bg-slate-950/60 rounded-xl p-3 border border-slate-800/80">
+                        <div class="min-w-0">
+                            <p class="text-sm truncate">{{ tx.description }}</p>
+                            <p class="text-[10px] text-slate-500">{{ tx.date }} · {{ tx.category }}</p>
+                        </div>
+                        <span class="text-sm font-bold text-rose-400 shrink-0">{{ "{:,}".format(tx.amount).replace(",", " ") }} ₽</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-sm text-slate-500 text-center py-8">Трат в этом месяце ещё нет</p>
+                {% endif %}
+            </div>
+        </div>
+
     </main>
 
     <!-- Bottom Nav -->
     <nav class="fixed bottom-0 inset-x-0 z-30 bg-slate-950/95 backdrop-blur border-t border-slate-800">
         <div class="max-w-md mx-auto flex justify-around py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-            <button onclick="switchTab('overview')" id="nav-overview" class="nav-btn nav-active flex flex-col items-center gap-0.5 px-4 py-1 text-slate-500 transition-colors">
+            <button onclick="switchTab('overview')" id="nav-overview" class="nav-btn nav-active flex flex-col items-center gap-0.5 px-2 py-1 text-slate-500 transition-colors">
                 <span class="text-xl">🧠</span>
                 <span class="text-[9px] font-semibold uppercase tracking-wide">Overview</span>
                 <span class="nav-dot w-1 h-1 rounded-full bg-indigo-400"></span>
             </button>
-            <button onclick="switchTab('tasks')" id="nav-tasks" class="nav-btn flex flex-col items-center gap-0.5 px-4 py-1 text-slate-500 transition-colors">
+            <button onclick="switchTab('tasks')" id="nav-tasks" class="nav-btn flex flex-col items-center gap-0.5 px-2 py-1 text-slate-500 transition-colors">
                 <span class="text-xl">📋</span>
                 <span class="text-[9px] font-semibold uppercase tracking-wide">Tasks</span>
                 <span class="nav-dot w-1 h-1 rounded-full bg-indigo-400"></span>
             </button>
-            <button onclick="switchTab('health')" id="nav-health" class="nav-btn flex flex-col items-center gap-0.5 px-4 py-1 text-slate-500 transition-colors">
+            <button onclick="switchTab('health')" id="nav-health" class="nav-btn flex flex-col items-center gap-0.5 px-2 py-1 text-slate-500 transition-colors">
                 <span class="text-xl">🌙</span>
                 <span class="text-[9px] font-semibold uppercase tracking-wide">Health</span>
                 <span class="nav-dot w-1 h-1 rounded-full bg-indigo-400"></span>
             </button>
-            <button onclick="switchTab('study')" id="nav-study" class="nav-btn flex flex-col items-center gap-0.5 px-4 py-1 text-slate-500 transition-colors">
+            <button onclick="switchTab('study')" id="nav-study" class="nav-btn flex flex-col items-center gap-0.5 px-2 py-1 text-slate-500 transition-colors">
                 <span class="text-xl">🎓</span>
                 <span class="text-[9px] font-semibold uppercase tracking-wide">Study</span>
+                <span class="nav-dot w-1 h-1 rounded-full bg-indigo-400"></span>
+            </button>
+            <button onclick="switchTab('finance')" id="nav-finance" class="nav-btn flex flex-col items-center gap-0.5 px-2 py-1 text-slate-500 transition-colors">
+                <span class="text-xl">💰</span>
+                <span class="text-[9px] font-semibold uppercase tracking-wide">Finance</span>
                 <span class="nav-dot w-1 h-1 rounded-full bg-indigo-400"></span>
             </button>
         </div>
@@ -267,8 +308,9 @@
             document.body.style.backgroundColor = '#020617';
         }
 
-        const TABS = ['overview', 'tasks', 'health', 'study'];
+        const TABS = ['overview', 'tasks', 'health', 'study', 'finance'];
         let chartInstance = null;
+        let financeChartInstance = null;
         let currentFlashcard = null;
 
         function getTelegramInitData() {
@@ -282,6 +324,7 @@
             });
             if (name === 'health' && !chartInstance) initChart();
             if (name === 'study') loadFlashcard();
+            if (name === 'finance' && !financeChartInstance) initFinanceChart();
         }
 
         async function completeTask(checkbox) {
@@ -490,6 +533,41 @@
                     scales: {
                         x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 9 } } },
                         y: { min: 0, grid: { color: 'rgba(129, 140, 248, 0.08)' }, ticks: { color: '#94a3b8', font: { size: 9 }, stepSize: 2 } },
+                    },
+                },
+            });
+        }
+
+        function initFinanceChart() {
+            const canvas = document.getElementById('financeChart');
+            if (!canvas) return;
+
+            const categoryData = {{ finance_by_category|tojson }};
+            const labels = Object.keys(categoryData);
+            const values = Object.values(categoryData);
+            if (!labels.length) return;
+
+            const palette = ['#818cf8', '#f472b6', '#fbbf24', '#34d399', '#60a5fa', '#c084fc', '#fb923c', '#4ade80'];
+
+            financeChartInstance = new Chart(canvas.getContext('2d'), {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: values,
+                        backgroundColor: labels.map((_, i) => palette[i % palette.length]),
+                        borderColor: '#0f172a',
+                        borderWidth: 2,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: { color: '#cbd5e1', font: { size: 10 }, boxWidth: 10, padding: 8 },
+                        },
                     },
                 },
             });

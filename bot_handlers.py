@@ -223,11 +223,27 @@ User thought: "{user_message}"
 
 # === BOT HANDLERS ===
 
-@bot.message_handler(commands=['start'])
+HELP_TEXT = """🧠 Твой личный второй мозг. Просто пиши обычным текстом, голосом или фото — я сам пойму, что с этим делать (задача, трата, заметка, фильм, человек, проект...).
+
+Команды:
+/sleep <часы> — записать сон, например /sleep 7.5
+/journal <текст> — личный дневник/рефлексия (можно ответить на сообщение)
+/quiz — повторить карточки (Anki-стиль, есть и в мини-аппе)
+/who <имя> — карточка человека/медиа/проекта прямо в чат
+/brain <вопрос> — спросить у Второго Мозга (Tasks/Finance/Health/Memory/Goals + люди/медиа/проекты)
+/search <запрос> — поиск по всем заметкам в Obsidian
+/update_schedule — обновить расписание вуза (формат — спроси отдельно)
+/digest — разобрать Raw_Inbox.md (внешние заметки) на задачи/вопросы
+/process — разобрать Inbox.md на заметки/карточки
+
+Открой кнопку меню рядом с полем ввода — там дашборд со статистикой, задачами, финансами и повторением карточек."""
+
+
+@bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     if not is_me(message):
         return
-    bot.reply_to(message, "Привет! Твой личный мозг запущен. Я подключен к Google Диску и Obsidian!")
+    bot.reply_to(message, HELP_TEXT)
 
 
 @bot.message_handler(commands=['sleep'])
@@ -632,11 +648,20 @@ def handle_srs_review(call):
 
         interval_days = updated_card["value"].get("interval_days", 0) if updated_card["value"] else 0
         next_label = "меньше часа" if rating == "again" else f"через {interval_days} дн."
+
+        # Offer a fresh AI explanation when the card wasn't remembered -
+        # a small step towards an "AI tutor" rather than just re-showing
+        # the same Q&A again later.
+        explain_keyboard = None
+        if rating == "again":
+            explain_keyboard = telebot.types.InlineKeyboardMarkup()
+            explain_keyboard.add(telebot.types.InlineKeyboardButton("🎓 Объяснить по-другому", callback_data=f"explain:{card_id}"))
+
         bot.edit_message_text(
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             text=f"{srs.RATING_LABELS.get(rating, '✅')} · следующее повторение {next_label}",
-            reply_markup=None
+            reply_markup=explain_keyboard
         )
         bot.answer_callback_query(call.id)
 
@@ -646,6 +671,46 @@ def handle_srs_review(call):
         _send_next_due_flashcard(call.message.chat.id)
     except Exception as e:
         logger.error(f"[Quiz Callback] Error handling SRS: {e}")
+        bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('explain:'))
+def handle_explain_card(call):
+    """
+    Small step towards an "AI tutor" rather than a static Q&A: when a card
+    wasn't remembered (rated "again"), offers a fresh explanation of the
+    same concept - a different angle, an analogy or a mnemonic - instead
+    of just showing the identical answer again next time.
+    """
+    if call.from_user.id != config.MY_TELEGRAM_ID:
+        bot.answer_callback_query(call.id, "Ошибка: Доступ запрещен.", show_alert=True)
+        return
+    try:
+        card_id = call.data.split(':', 1)[1]
+        flashcards = read_json_from_drive(vault_files.FLASHCARDS)
+        if not isinstance(flashcards, list):
+            flashcards = []
+        card = next((c for c in flashcards if c.get("id") == card_id), None)
+        if not card:
+            bot.answer_callback_query(call.id, "Карточка не найдена.", show_alert=True)
+            return
+
+        bot.answer_callback_query(call.id, "Объясняю...")
+        bot.send_chat_action(call.message.chat.id, 'typing')
+
+        prompt = apply_format_rule(f"""Ты — терпеливый репетитор. Пользователь не смог вспомнить ответ на учебную карточку. Объясни концепцию ЗАНОВО, другим способом (не повторяй дословно старый ответ): используй аналогию, мнемонику или более простую формулировку, чтобы это лучше запомнилось. Будь кратким (3-5 предложений).
+
+Вопрос: {card.get('q', '')}
+Правильный ответ: {card.get('a', '')}
+""")
+        response = key_manager.generate_content(model=config.MODEL_COMPLEX, contents=prompt)
+        explanation = (response.text or "").strip()
+        if not explanation:
+            explanation = "Не получилось сгенерировать объяснение, попробуй ещё раз позже."
+
+        bot.send_message(call.message.chat.id, f"🎓 {explanation}")
+    except Exception as e:
+        logger.error(f"[Explain Card] Error: {e}")
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
 
 

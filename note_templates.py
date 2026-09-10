@@ -3,9 +3,8 @@ YAML-frontmatter note templates for the vault (ARCHITECTURE.md step 2).
 
 Defines the fixed set of note types (resource/media/person/project) and
 their expected frontmatter fields, plus small render/parse helpers for
-that frontmatter. Not wired into the AI pipeline yet - that happens in
-ARCHITECTURE.md step 3, once the Router/Archivist prompts are updated to
-produce these types.
+that frontmatter. Wired into the AI pipeline via ai_pipeline.save_entity_note
+(the [MEDIA]/[PERSON]/[PROJECT] tags) since ARCHITECTURE.md step 3.
 
 Frontmatter here is a deliberately simple `key: value` / `key: [a, b]`
 subset - not full YAML - so we don't need to add a PyYAML dependency for

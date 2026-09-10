@@ -16,6 +16,7 @@ from drive_service import (
     read_file_from_drive,
     read_or_create_goals,
     update_file_on_drive,
+    has_health_entry_for_date,
 )
 from ai_pipeline import (
     apply_format_rule,
@@ -85,7 +86,22 @@ def restore_reminders_on_startup(bot_instance):
                 continue
 
             task_text = dt_match.group("text").strip()
-            if "⏰ REMINDER:" not in task_text and "|" not in body:
+            # Only re-schedule lines that were actually created as dynamic
+            # reminders (the "⏰ REMINDER:" marker - see
+            # ai_pipeline.py's SCHEDULE tag and schedule_reminder_job's own
+            # default task_line). This used to also require "|" not in
+            # body, which is impossible to satisfy here since
+            # TASK_DATETIME_RE.search(body) already matched on a body
+            # containing "|" - that clause was dead code, so the guard
+            # never actually filtered anything, and EVERY future-dated open
+            # task (a plain [TASK_ADD] chore, an injected university class,
+            # a goal-driven micro-task from the morning briefing - none of
+            # which the user asked to be pinged about) got turned into a
+            # pushy AI-narrated Telegram notification with Done/Snooze
+            # buttons, but only on days the process happened to restart
+            # before their time - a startup-timing accident, not a
+            # deliberate choice.
+            if "⏰ REMINDER:" not in task_text:
                 continue
 
             try:
@@ -150,8 +166,7 @@ def check_daily_sleep():
     """
     try:
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
-        health_content = read_file_from_drive(vault_files.HEALTH)
-        if today_str not in health_content:
+        if not has_health_entry_for_date("sleep", today_str):
             bot.send_message(
                 config.MY_TELEGRAM_ID,
                 "Павел, доброе утро! 🛌 Я заметил, что сегодня ты еще не записал свой сон. Расскажи, сколько часов удалось поспать и как самочувствие?",

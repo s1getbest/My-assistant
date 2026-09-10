@@ -648,6 +648,25 @@ def get_mood_chart_data():
     return _get_health_series("mood")
 
 
+def has_health_entry_for_date(entry_type, date_str):
+    """
+    True if Health.md has an entry of the given type ("sleep"/"mood") for
+    date_str (YYYY-MM-DD). Used by scheduler_jobs.check_daily_sleep()
+    instead of a naive `date_str in health_content` substring check - which
+    would wrongly count a same-day *mood* entry (e.g. from an early
+    /journal) as "sleep logged", since both entry types' lines start with
+    the identical date string. That was a real instance of it: the 10:00
+    "did you log your sleep?" ping would silently never fire on a day the
+    user journaled before 10:00 but hadn't actually logged sleep yet.
+    """
+    health_content = read_file_from_drive(vault_files.HEALTH)
+    for line in health_content.split("\n"):
+        parsed = _parse_health_line(line)
+        if parsed and parsed[0] == date_str and parsed[1] == entry_type:
+            return True
+    return False
+
+
 def get_today_tasks():
     today = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
     tasks = []

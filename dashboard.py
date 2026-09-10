@@ -21,6 +21,7 @@ from drive_service import (
     update_json_file_on_drive,
     get_today_tasks,
     get_sleep_chart_data,
+    get_mood_chart_data,
     get_habit_completion_array,
     get_user_profile,
     get_monthly_expenses,
@@ -273,6 +274,12 @@ def home():
         sleep_data, sleep_labels, last_sleep = [0], ["No data"], "—"
 
     try:
+        mood_data, mood_labels, last_mood = get_mood_chart_data()
+    except Exception as e:
+        logger.error(f"[Dashboard] Error getting mood data: {e}")
+        mood_data, mood_labels, last_mood = [0], ["No data"], "—"
+
+    try:
         habit_data = get_habit_completion_array()
         if not habit_data:
             raise ValueError("Empty habit completion array")
@@ -381,6 +388,9 @@ def home():
         sleep_data=sleep_data,
         sleep_labels=sleep_labels,
         last_sleep=last_sleep,
+        mood_data=mood_data,
+        mood_labels=mood_labels,
+        last_mood=last_mood,
         habit_data=habit_data,
         welcome_msg=welcome_msg,
         profile=profile,

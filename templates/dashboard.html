@@ -163,10 +163,28 @@
                     <p class="text-2xl font-extrabold text-indigo-300 mt-1" id="avgSleep">—</p>
                 </div>
             </div>
-            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
                 <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🌙 Тренд сна</h2>
                 <div class="h-44">
                     <canvas id="sleepChart"></canvas>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Настроение</p>
+                    <p class="text-2xl font-extrabold text-fuchsia-400 mt-1">{{ last_mood }} <span class="text-sm">/10</span></p>
+                </div>
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (7д)</p>
+                    <p class="text-2xl font-extrabold text-fuchsia-300 mt-1" id="avgMood">—</p>
+                </div>
+            </div>
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🎭 Тренд настроения</h2>
+                <p class="text-[11px] text-slate-500 mb-3">По записям из /journal и голосовых дневников.</p>
+                <div class="h-44">
+                    <canvas id="moodChart"></canvas>
                 </div>
             </div>
         </div>
@@ -315,6 +333,7 @@
 
         const TABS = ['overview', 'tasks', 'health', 'study', 'finance'];
         let chartInstance = null;
+        let moodChartInstance = null;
         let financeChartInstance = null;
         let currentFlashcard = null;
 
@@ -328,6 +347,7 @@
                 document.getElementById('nav-' + t).classList.toggle('nav-active', t === name);
             });
             if (name === 'health' && !chartInstance) initChart();
+            if (name === 'health' && !moodChartInstance) initMoodChart();
             if (name === 'study') loadFlashcard();
             if (name === 'finance' && !financeChartInstance) initFinanceChart();
         }
@@ -538,6 +558,49 @@
                     scales: {
                         x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 9 } } },
                         y: { min: 0, grid: { color: 'rgba(129, 140, 248, 0.08)' }, ticks: { color: '#94a3b8', font: { size: 9 }, stepSize: 2 } },
+                    },
+                },
+            });
+        }
+
+        function initMoodChart() {
+            const moodData = {{ mood_data|tojson }};
+            const moodLabels = {{ mood_labels|tojson }};
+            const valid = moodData.filter(v => v > 0);
+            if (valid.length) {
+                const avg = (valid.reduce((a, b) => a + b, 0) / valid.length).toFixed(1);
+                document.getElementById('avgMood').textContent = avg + ' /10';
+            }
+
+            const ctx = document.getElementById('moodChart').getContext('2d');
+            const moodGradient = ctx.createLinearGradient(0, 0, 0, 176);
+            moodGradient.addColorStop(0, 'rgba(232, 121, 249, 0.35)');
+            moodGradient.addColorStop(1, 'rgba(232, 121, 249, 0)');
+
+            moodChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: moodLabels,
+                    datasets: [{
+                        data: moodData,
+                        borderColor: '#e879f9',
+                        backgroundColor: moodGradient,
+                        tension: 0.4,
+                        fill: true,
+                        borderWidth: 2.5,
+                        pointBackgroundColor: '#f5d0fe',
+                        pointBorderColor: '#e879f9',
+                        pointBorderWidth: 2,
+                        pointRadius: 4,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 9 } } },
+                        y: { min: 0, max: 10, grid: { color: 'rgba(232, 121, 249, 0.08)' }, ticks: { color: '#94a3b8', font: { size: 9 }, stepSize: 2 } },
                     },
                 },
             });

@@ -548,33 +548,67 @@ def get_monthly_expenses():
         return 0, []
 
 
-def get_sleep_chart_data():
-    sleep_data, sleep_labels = [], []
-    last_sleep = "—"
+def _parse_health_line(line):
+    """
+    Health.md mixes two kinds of entries written by different features -
+    "* YYYY-MM-DD: 7.5" (sleep hours, from /sleep or the [HEALTH] tag) and
+    "* YYYY-MM-DD: Mood 8/10" (from /journal or a voice journal entry's
+    [MOOD] tag) - interleaved by date, not separated into different
+    sections. Returns (date_part, entry_type, value) where entry_type is
+    "sleep" or "mood", or None if the line doesn't match either shape.
+    """
+    line = line.strip()
+    if not line or ":" not in line:
+        return None
+    date_part = line.split(":", 1)[0].replace("*", "").strip()
+    val_part = line.split(":", 1)[1].strip()
+    if val_part.lower().startswith("mood"):
+        score_str = val_part[4:].strip().split("/")[0].strip()
+        try:
+            return date_part, "mood", float(score_str.replace(",", "."))
+        except ValueError:
+            return None
+    try:
+        return date_part, "sleep", float(val_part.replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _get_health_series(entry_type, limit=7):
+    """
+    Returns (values, labels, last_value_str) for the last `limit` entries
+    of the given type ("sleep"/"mood") in Health.md, in chronological
+    order - filtering by type first, unlike a naive "last N lines" which
+    would mix sleep and mood entries together (see _parse_health_line).
+    """
+    values, labels = [], []
+    last_value_str = "—"
     try:
         health_content = read_file_from_drive(vault_files.HEALTH)
-        health_lines = [l.strip() for l in health_content.split("\n") if l.strip()]
-        if health_lines:
-            last_sleep = health_lines[-1].split(":", 1)[-1].strip()
-            for line in health_lines[-7:]:
-                if ":" not in line:
-                    continue
-                date_part = line.split(":", 1)[0].replace("*", "").strip()
-                val_part = line.split(":", 1)[1].strip()
+        parsed = [_parse_health_line(line) for line in health_content.split("\n")]
+        matching = [p for p in parsed if p and p[1] == entry_type]
+        if matching:
+            last_value_str = str(matching[-1][2])
+            for date_part, _, value in matching[-limit:]:
                 try:
-                    formatted_date = datetime.strptime(date_part, "%Y-%m-%d").strftime("%d.%m")
+                    label = datetime.strptime(date_part, "%Y-%m-%d").strftime("%d.%m")
                 except ValueError:
-                    formatted_date = date_part
-                try:
-                    sleep_data.append(float(val_part.replace(",", ".")))
-                    sleep_labels.append(formatted_date)
-                except ValueError:
-                    pass
+                    label = date_part
+                values.append(value)
+                labels.append(label)
     except Exception as e:
-        logger.error(f"[Parser] Health parse error: {e}")
-    if not sleep_data:
-        sleep_data, sleep_labels = [0], ["Нет данных"]
-    return sleep_data, sleep_labels, last_sleep
+        logger.error(f"[Parser] Health parse error ({entry_type}): {e}")
+    if not values:
+        values, labels = [0], ["Нет данных"]
+    return values, labels, last_value_str
+
+
+def get_sleep_chart_data():
+    return _get_health_series("sleep")
+
+
+def get_mood_chart_data():
+    return _get_health_series("mood")
 
 
 def get_today_tasks():

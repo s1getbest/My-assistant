@@ -8,6 +8,7 @@ import config
 import vault_files
 import university_schedule
 import vault_index
+import srs
 from logging_config import get_logger
 
 from bot_instance import bot
@@ -408,6 +409,14 @@ def get_due_flashcard():
 
 @app.route('/api/flashcards/review', methods=['POST'])
 def review_flashcard():
+    """
+    Rates a flashcard using the SM-2 algorithm (srs.py) - expects
+    {"id": ..., "rating": "again"|"hard"|"good"|"easy"}, same 4-button
+    scheme as Telegram's /quiz, replacing the old fixed-delay
+    {"interval_hours": ...} scheme (which required the client to already
+    know what delay to ask for, instead of the server computing a real
+    per-card spaced-repetition schedule).
+    """
     try:
         init_data = request.headers.get('Authorization')
         if not validate_telegram_data(init_data):
@@ -415,23 +424,19 @@ def review_flashcard():
 
         data = request.get_json(silent=True) or {}
         card_id = data.get("id")
-        interval_hours = data.get("interval_hours")
-        if not card_id or interval_hours is None:
-            return jsonify({"success": False, "error": "id and interval_hours required"}), 400
+        rating = data.get("rating")
+        if not card_id or rating not in srs.RATINGS:
+            return jsonify({"success": False, "error": f"id and rating (one of {srs.RATINGS}) required"}), 400
 
-        try:
-            interval_hours = float(interval_hours)
-        except (TypeError, ValueError):
-            return jsonify({"success": False, "error": "interval_hours must be a number"}), 400
-
-        next_review = datetime.now(config.msk_tz) + timedelta(hours=interval_hours)
+        updated_card = {"value": None}
 
         def mutate(flashcards):
             if not isinstance(flashcards, list):
                 return None
             for card in flashcards:
                 if card.get("id") == card_id:
-                    card["next_review"] = next_review.strftime("%Y-%m-%d %H:%M:%S")
+                    srs.schedule_next_review(card, rating)
+                    updated_card["value"] = card
                     return flashcards
             return None
 
@@ -440,7 +445,7 @@ def review_flashcard():
         if result is None:
             return jsonify({"success": False, "error": "Card not found"}), 404
 
-        return jsonify({"success": True})
+        return jsonify({"success": True, "card": updated_card["value"]})
     except Exception as e:
         logger.error(f"[Dashboard] review_flashcard error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500

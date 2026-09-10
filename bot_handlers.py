@@ -2,18 +2,19 @@ import re
 from datetime import datetime, timedelta
 import telebot
 from google.genai import types
-from uuid import uuid4
-import threading
 import config
 import vault_files
 import university_schedule
 import vault_index
+import srs
+import note_templates
 from bot_instance import bot
 from key_manager import key_manager
 from logging_config import get_logger
 from drive_service import (
     delete_line_from_task_file,
     get_task_line_by_token,
+    get_folder_id,
     list_markdown_files,
     mark_task_done_by_token,
     read_json_from_drive,
@@ -213,53 +214,11 @@ User thought: "{user_message}"
         return None
 
 
-def agent_tutor_background(note_text):
-    """
-    Agent Tutor (Background): Uses MODEL_COMPLEX to generate contextual Active Recall flashcard from note.
-    Runs in background thread to avoid blocking Telegram reply.
-    Uses Bloom's Taxonomy for level-appropriate questions.
-    Output: [CARD] Question | Answer with [[wikilinks]]
-    """
-    def generate_flashcard():
-        try:
-            prompt = apply_format_rule(f"""You are an expert neuro-education tutor using Bloom's Taxonomy and Spaced Repetition. Analyze the saved Zettelkasten note:
-  - If it's an atomic fact (Level 1: word, definition, date), generate a direct Q&A card.
-  - If it's a complex concept, historical event, or university lecture (Level 2 & 3), generate a CONTEXTUAL Active Recall card. Ask 'Why' or 'How does X relate to Y?'. Include the explanatory narrative and Obsidian wikilinks in the answer so the user recalls the whole system.
-  Output strictly: [CARD] Question | Answer with [[wikilinks]].
-
-Note: "{note_text}"
-""")
-            response = key_manager.generate_content(
-                model=config.MODEL_COMPLEX,
-                contents=prompt
-            )
-            card_text = (response.text or "").strip()
-
-            # Parse and save flashcard
-            if "[CARD]" in card_text and "|" in card_text:
-                card_body = card_text.split("[CARD]", 1)[1].strip()
-                if "|" in card_body:
-                    question, answer = card_body.split("|", 1)
-
-                    def mutate(flashcards):
-                        if not isinstance(flashcards, list):
-                            flashcards = []
-                        flashcards.append({
-                            "id": str(uuid4()),
-                            "q": question.strip(),
-                            "a": answer.strip(),
-                            "next_review": datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M:%S"),
-                        })
-                        return flashcards
-
-                    update_json_file_on_drive(vault_files.FLASHCARDS, mutate, default_factory=list)
-                    logger.info("[Agent Tutor] Flashcard generated and saved")
-        except Exception as e:
-            logger.error(f"[Agent Tutor] Error: {e}")
-
-    thread = threading.Thread(target=generate_flashcard)
-    thread.daemon = True
-    thread.start()
+# Agent Tutor (background flashcard generation) moved to ai_pipeline.py and
+# is now triggered automatically from apply_gemini_tags() for NOTE/MEDIA/
+# PROJECT tags, so it fires consistently from every handler that applies
+# tags (chat, voice, photo, /journal, /digest, /process) instead of only
+# from chat_with_gemini as before.
 
 
 # === BOT HANDLERS ===
@@ -290,36 +249,49 @@ def track_sleep(message):
         bot.reply_to(message, f"Ошибка записи сна: {e}")
 
 
+def _send_next_due_flashcard(chat_id):
+    """
+    Core of /quiz, factored out so it can be called with a plain chat_id -
+    needed because handle_srs_review used to call quiz_flashcards(call.message)
+    to auto-advance to the next card, but call.message is the *bot's own*
+    message (the one with the inline keyboard), whose from_user is the bot
+    itself - so is_me(call.message) was always False and the "send next
+    card" step silently did nothing. The caller here is already
+    responsible for having verified the request came from MY_TELEGRAM_ID.
+    """
+    flashcards = read_json_from_drive(vault_files.FLASHCARDS)
+    if not isinstance(flashcards, list):
+        flashcards = []
+
+    now = datetime.now(config.msk_tz)
+    due_cards = []
+    for card in flashcards:
+        try:
+            review_dt = datetime.strptime(card.get("next_review", ""), "%Y-%m-%d %H:%M:%S")
+            review_dt = config.msk_tz.localize(review_dt)
+            if review_dt <= now:
+                due_cards.append((review_dt, card))
+        except Exception:
+            continue
+
+    due_cards.sort(key=lambda item: item[0])
+    if not due_cards:
+        bot.send_message(chat_id, "🎉 Нет карточек для повторения!")
+        return
+
+    card = due_cards[0][1]
+    keyboard = telebot.types.InlineKeyboardMarkup()
+    keyboard.add(telebot.types.InlineKeyboardButton("Показать ответ", callback_data=f"show_answer:{card['id']}"))
+    bot.send_message(chat_id, f"🎓 **Вопрос:**\n\n{card['q']}", reply_markup=keyboard, parse_mode="Markdown")
+
+
 @bot.message_handler(commands=['quiz'])
 def quiz_flashcards(message):
     if not is_me(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
     try:
-        flashcards = read_json_from_drive(vault_files.FLASHCARDS)
-        if not isinstance(flashcards, list):
-            flashcards = []
-
-        now = datetime.now(config.msk_tz)
-        due_cards = []
-        for card in flashcards:
-            try:
-                review_dt = datetime.strptime(card.get("next_review", ""), "%Y-%m-%d %H:%M:%S")
-                review_dt = config.msk_tz.localize(review_dt)
-                if review_dt <= now:
-                    due_cards.append((review_dt, card))
-            except Exception:
-                continue
-
-        due_cards.sort(key=lambda item: item[0])
-        if not due_cards:
-            bot.reply_to(message, "🎉 Нет карточек для повторения!")
-            return
-
-        card = due_cards[0][1]
-        keyboard = telebot.types.InlineKeyboardMarkup()
-        keyboard.add(telebot.types.InlineKeyboardButton("Показать ответ", callback_data=f"show_answer:{card['id']}"))
-        bot.reply_to(message, f"🎓 **Вопрос:**\n\n{card['q']}", reply_markup=keyboard, parse_mode="Markdown")
+        _send_next_due_flashcard(message.chat.id)
     except Exception as e:
         bot.reply_to(message, f"Ошибка загрузки карточки: {e}")
 
@@ -605,14 +577,13 @@ def handle_show_answer(call):
 
         keyboard = telebot.types.InlineKeyboardMarkup()
         keyboard.row(
-            telebot.types.InlineKeyboardButton("Снова 1м", callback_data=f"srs:{card_id}:0.016"),
-            telebot.types.InlineKeyboardButton("Позже 6ч", callback_data=f"srs:{card_id}:6")
+            telebot.types.InlineKeyboardButton(srs.RATING_LABELS["again"], callback_data=f"srs:{card_id}:again"),
+            telebot.types.InlineKeyboardButton(srs.RATING_LABELS["hard"], callback_data=f"srs:{card_id}:hard"),
         )
         keyboard.row(
-            telebot.types.InlineKeyboardButton("Завтра 1д", callback_data=f"srs:{card_id}:24"),
-            telebot.types.InlineKeyboardButton("Неделя 7д", callback_data=f"srs:{card_id}:168")
+            telebot.types.InlineKeyboardButton(srs.RATING_LABELS["good"], callback_data=f"srs:{card_id}:good"),
+            telebot.types.InlineKeyboardButton(srs.RATING_LABELS["easy"], callback_data=f"srs:{card_id}:easy"),
         )
-        keyboard.add(telebot.types.InlineKeyboardButton("Месяц 30д", callback_data=f"srs:{card_id}:720"))
 
         bot.edit_message_text(
             chat_id=call.message.chat.id,
@@ -629,21 +600,27 @@ def handle_show_answer(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('srs:'))
 def handle_srs_review(call):
+    """
+    Rates a flashcard using the SM-2 algorithm (srs.py) - Again/Hard/Good/
+    Easy, same as Anki's review screen, instead of the old fixed-delay
+    buttons (1m/6h/24h/168h/720h chosen manually every time, which wasn't
+    real spaced repetition).
+    """
     if call.from_user.id != config.MY_TELEGRAM_ID:
         bot.answer_callback_query(call.id, "Ошибка: Доступ запрещен.", show_alert=True)
         return
     try:
-        _, card_id, interval_hours = call.data.split(':', 2)
-        interval_hours = float(interval_hours)
+        _, card_id, rating = call.data.split(':', 2)
 
-        next_review = datetime.now(config.msk_tz) + timedelta(hours=interval_hours)
+        updated_card = {"value": None}
 
         def mutate(flashcards):
             if not isinstance(flashcards, list):
                 return None
             for card in flashcards:
                 if card.get("id") == card_id:
-                    card["next_review"] = next_review.strftime("%Y-%m-%d %H:%M:%S")
+                    srs.schedule_next_review(card, rating)
+                    updated_card["value"] = card
                     return flashcards
             return None
 
@@ -653,16 +630,20 @@ def handle_srs_review(call):
             bot.answer_callback_query(call.id, "Карточка не найдена.", show_alert=True)
             return
 
+        interval_days = updated_card["value"].get("interval_days", 0) if updated_card["value"] else 0
+        next_label = "меньше часа" if rating == "again" else f"через {interval_days} дн."
         bot.edit_message_text(
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
-            text="✅ Запомнил!",
+            text=f"{srs.RATING_LABELS.get(rating, '✅')} · следующее повторение {next_label}",
             reply_markup=None
         )
         bot.answer_callback_query(call.id)
 
-        # Automatically send next due card
-        quiz_flashcards(call.message)
+        # Automatically send next due card. Uses call.message.chat.id
+        # directly rather than quiz_flashcards(call.message) - see
+        # _send_next_due_flashcard's docstring for why that never worked.
+        _send_next_due_flashcard(call.message.chat.id)
     except Exception as e:
         logger.error(f"[Quiz Callback] Error handling SRS: {e}")
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
@@ -919,6 +900,64 @@ Notes:
         bot.reply_to(message, f"Ошибка глобального поиска: {e}")
 
 
+_WHO_CATEGORY_META = {
+    "people": {"folder": vault_files.FOLDER_PEOPLE, "icon": "👤", "name_field": "name"},
+    "media": {"folder": vault_files.FOLDER_MEDIA, "icon": "🎬", "name_field": "title"},
+    "projects": {"folder": vault_files.FOLDER_PROJECTS, "icon": "📁", "name_field": "name"},
+}
+
+
+@bot.message_handler(commands=['who'])
+def handle_who(message):
+    """
+    Looks up a person/media/project by name (via vault_index.find_entity,
+    which now also fuzzy-matches close spellings) and sends the note's
+    content directly in the chat - no need to open Obsidian just to recall
+    a detail. No AI call involved, just a direct Index.json + note lookup.
+    """
+    if not is_me(message):
+        return
+    try:
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            bot.reply_to(message, "Укажи имя/название. Пример: `/who Иван`", parse_mode="Markdown")
+            return
+        query = args[1].strip()
+
+        entry = None
+        category = None
+        for candidate_category in _WHO_CATEGORY_META:
+            entry = vault_index.find_entity(candidate_category, query)
+            if entry:
+                category = candidate_category
+                break
+
+        if not entry:
+            bot.reply_to(
+                message,
+                f"Не нашёл «{query}» среди людей/медиа/проектов. Попробуй /search для поиска по всем заметкам."
+            )
+            return
+
+        meta = _WHO_CATEGORY_META[category]
+        filename = entry["file"].split("/")[-1]
+        content = read_file_from_drive(filename, folder_id=get_folder_id(meta["folder"]))
+        fields, body = note_templates.parse_note(content)
+
+        display_name = entry.get(meta["name_field"], query)
+        info_bits = [f"{key}: {fields[key]}" for key in ("category", "status", "rating", "relationship") if fields.get(key)]
+
+        lines = [f"{meta['icon']} {display_name}"]
+        if info_bits:
+            lines.append(" | ".join(info_bits))
+        lines.append("")
+        lines.append(body or "(заметка пока пустая)")
+
+        bot.reply_to(message, "\n".join(lines))
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка поиска карточки: {e}")
+
+
 @bot.message_handler(commands=['digest'])
 def handle_digest(message):
     if not is_me(message):
@@ -1063,15 +1102,11 @@ def chat_with_gemini(message):
             status.update("📝 Пишу заметку в базу знаний...")
             note_output = agent_archivist(user_message_text)
             if note_output and "[NOTE]" in note_output:
-                # Parse and save the note
+                # Parse and save the note. apply_gemini_tags() itself
+                # triggers the background Agent Tutor (flashcard
+                # generation) for NOTE tags - see ai_pipeline.py.
                 tags = parse_gemini_tags(note_output)
                 apply_gemini_tags(tags)
-
-                # Extract note text for background Tutor
-                if "|" in note_output:
-                    note_body = note_output.split("|", 1)[1].strip()
-                    # Trigger background Agent Tutor
-                    agent_tutor_background(note_body)
 
                 reply_part = f"📝 Заметка сохранена: {note_output.replace('[NOTE]', '').strip()}"
                 if not reply_part or not reply_part.strip():
@@ -1136,12 +1171,6 @@ You have access to the user's tasks (Tasks.md). If the user asks about their sch
         tags = parse_gemini_tags(raw_text)
         reply_part = extract_reply(raw_text)
         apply_gemini_tags(tags)
-
-        # Check if a NOTE was generated in the standard flow
-        for tag_type, payload in tags:
-            if tag_type == "NOTE" and "|" in payload:
-                note_body = payload.split("|", 1)[1].strip()
-                agent_tutor_background(note_body)
 
         # Prevent empty reply to avoid Telegram 400 errors
         if not reply_part or not reply_part.strip():

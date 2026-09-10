@@ -185,6 +185,35 @@
                 {% endif %}
             </div>
 
+            <!-- Flashcard Review Card (Anki-style SM-2, see srs.py) -->
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🎴 Повторение</h2>
+
+                <div id="study-empty" class="text-sm text-slate-500 text-center py-8">Загрузка...</div>
+
+                <div id="study-card" class="hidden">
+                    <div class="bg-slate-950/60 rounded-xl p-4 border border-slate-800/80 min-h-[88px] flex items-center justify-center text-center">
+                        <p id="study-question" class="text-base leading-relaxed"></p>
+                    </div>
+
+                    <div id="study-answer-wrap" class="hidden mt-3 bg-indigo-950/30 rounded-xl p-4 border border-indigo-500/20">
+                        <p class="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1">💡 Ответ</p>
+                        <p id="study-answer" class="text-sm leading-relaxed text-indigo-100"></p>
+                    </div>
+
+                    <button id="show-answer-btn" onclick="showFlashcardAnswer()" class="w-full mt-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold py-2.5 rounded-xl transition-colors text-sm">
+                        Показать ответ
+                    </button>
+
+                    <div id="study-actions" class="hidden grid grid-cols-4 gap-1.5 mt-3">
+                        <button onclick="reviewFlashcard('again')" class="bg-red-500/15 hover:bg-red-500/25 text-red-300 font-semibold py-2.5 rounded-xl text-[10px] leading-tight transition-colors">😵<br>Забыл</button>
+                        <button onclick="reviewFlashcard('hard')" class="bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 font-semibold py-2.5 rounded-xl text-[10px] leading-tight transition-colors">😐<br>Трудно</button>
+                        <button onclick="reviewFlashcard('good')" class="bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 font-semibold py-2.5 rounded-xl text-[10px] leading-tight transition-colors">🙂<br>Хорошо</button>
+                        <button onclick="reviewFlashcard('easy')" class="bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 font-semibold py-2.5 rounded-xl text-[10px] leading-tight transition-colors">😎<br>Легко</button>
+                    </div>
+                </div>
+            </div>
+
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
                 <div class="flex items-center gap-2 mb-3">
                     <span class="text-lg">🎓</span>
@@ -200,7 +229,6 @@
                         <p class="text-3xl font-extrabold text-amber-400 mt-1">{{ flashcard_stats.due }}</p>
                     </div>
                 </div>
-                <p class="text-xs text-slate-500 text-center mt-4">Используй /quiz в Telegram для повторения карточек</p>
             </div>
         </div>
 
@@ -241,6 +269,7 @@
 
         const TABS = ['overview', 'tasks', 'health', 'study'];
         let chartInstance = null;
+        let currentFlashcard = null;
 
         function getTelegramInitData() {
             return window.Telegram?.WebApp?.initData || '';
@@ -252,6 +281,7 @@
                 document.getElementById('nav-' + t).classList.toggle('nav-active', t === name);
             });
             if (name === 'health' && !chartInstance) initChart();
+            if (name === 'study') loadFlashcard();
         }
 
         async function completeTask(checkbox) {
@@ -381,16 +411,18 @@
             document.getElementById('show-answer-btn').classList.add('hidden');
         }
 
-        async function reviewFlashcard(intervalHours) {
+        async function reviewFlashcard(rating) {
             if (!currentFlashcard) return;
-            
+
             // Optimistic UI: immediately hide current card
             const cardWrap = document.getElementById('study-card');
             const emptyState = document.getElementById('study-empty');
             cardWrap.classList.add('hidden');
             emptyState.classList.add('hidden');
-            
-            // Fire and forget the review request
+
+            // Fire and forget the review request - rating drives the SM-2
+            // schedule server-side (srs.py), same 4-button scheme as
+            // Telegram's /quiz.
             fetch('/api/flashcards/review', {
                 method: 'POST',
                 headers: {
@@ -399,12 +431,12 @@
                 },
                 body: JSON.stringify({
                     id: currentFlashcard.id,
-                    interval_hours: intervalHours
+                    rating: rating
                 })
             }).catch(e => {
                 showToast('Ошибка сохранения: ' + e.message);
             });
-            
+
             // Immediately load next card
             await loadFlashcard();
         }

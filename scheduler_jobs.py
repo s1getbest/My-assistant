@@ -5,6 +5,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import config
 import vault_files
 import university_schedule
+import vault_index
 from bot_instance import bot
 from key_manager import key_manager
 from logging_config import get_logger
@@ -430,8 +431,27 @@ def weekly_audit():
         finance_7d = filter_last_7_days(finance_content, dates)
         health_7d = filter_last_7_days(health_content, dates)
 
+        # Second Brain weekly activity: which people/media/project entities
+        # were first created this week, using Index.json's "added" date
+        # (see vault_index.py). Only entities *created* this week show up
+        # here, not every update to an existing one - good enough for a
+        # "what's new" weekly summary without needing per-update history.
+        index_data = vault_index.read_index()
+
+        def added_this_week(category):
+            return [e for e in index_data.get(category, []) if e.get("added") in dates]
+
+        new_people = added_this_week("people")
+        new_media = added_this_week("media")
+        new_projects = added_this_week("projects")
+        second_brain_summary = (
+            f"Новые люди: {', '.join(e.get('name', '?') for e in new_people) or 'нет'}\n"
+            f"Новые медиа (фильмы/аниме/книги/игры): {', '.join(e.get('title', '?') for e in new_media) or 'нет'}\n"
+            f"Новые проекты: {', '.join(e.get('name', '?') for e in new_projects) or 'нет'}"
+        )
+
         prompt = apply_format_rule(f"""Act as a strict but supportive life coach. Analyze this 7-day data.
-Summarize spending, average sleep, and task completion. Provide 1 actionable insight and ask for next week's goals.
+Summarize spending, average sleep, task completion, and social/media/project activity from the Second Brain section. Provide 1 actionable insight and ask for next week's goals.
 
 Here is the data for the past 7 days (dates: {', '.join(dates[::-1])}):
 
@@ -448,6 +468,11 @@ Here is the data for the past 7 days (dates: {', '.join(dates[::-1])}):
 ### Health.md (7-day data):
 ---
 {health_7d or "Нет записей."}
+---
+
+### Second Brain (новое за неделю - люди/медиа/проекты):
+---
+{second_brain_summary}
 ---
 
 Write a comprehensive, professional, yet warm and inspiring Markdown report. Deliver direct feedback as a dedicated coach. Use clear headings, list structures, and highlighted insights.

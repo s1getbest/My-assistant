@@ -117,7 +117,7 @@ class APIKeyManager:
         )
 
     def _safe_fallback_response(self, requested_model, current_model, attempts):
-        text = "Сервис ИИ временно перегружен. Попробуй еще раз через минуту." if current_model == config.MODEL_LITE else ""
+        text = "The AI service is temporarily overloaded. Please try again in a minute." if current_model == config.MODEL_LITE else ""
         return GenerationResult(
             text=text,
             requested_model=requested_model,

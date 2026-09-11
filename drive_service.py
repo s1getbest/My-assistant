@@ -549,7 +549,12 @@ def parse_finance_amount(line):
         return 0
     val_part = line.split(":", 1)[1].strip()
     num_part = val_part.split("|")[0].strip()
-    num_part = re.sub(r'[₽рруб\s]', '', num_part, flags=re.IGNORECASE)
+    # Strip anything that isn't part of the number itself (currency
+    # symbols/words in whatever language - $, USD, ₽, руб, ...) rather than
+    # blacklisting specific Cyrillic letters, which stopped making sense
+    # once the extraction prompt (ai_pipeline.get_extraction_rules) moved
+    # to English and started asking for a bare number in the first place.
+    num_part = re.sub(r'[^\d.,\-]', '', num_part)
     try:
         return int(float(num_part.replace(",", ".")))
     except ValueError:
@@ -670,7 +675,7 @@ def _get_health_series(entry_type, limit=7):
     except Exception as e:
         logger.error(f"[Parser] Health parse error ({entry_type}): {e}")
     if not values:
-        values, labels = [0], ["Нет данных"]
+        values, labels = [0], ["No data"]
     return values, labels, last_value_str
 
 
@@ -812,9 +817,9 @@ def get_expenses_by_category():
             amount = parse_finance_amount(line)
             val_part = line.split(":", 1)[1].strip()
             parts = [p.strip() for p in val_part.split("|")]
-            cat = parts[1] if len(parts) > 2 else (parts[1] if len(parts) > 1 else "Разное")
+            cat = parts[1] if len(parts) > 2 else (parts[1] if len(parts) > 1 else "Other")
             if not cat:
-                cat = "Разное"
+                cat = "Other"
             categories[cat] = categories.get(cat, 0) + amount
     except Exception as e:
         logger.error(f"[Parser] Expenses by category parse error: {e}")
@@ -828,9 +833,9 @@ def get_habit_completion_array():
         lines = content.split("\n")
 
         routine_keywords = [
-            "routine", "habit", "зарядка", "тренировка", "медитация", "чтение",
-            "планирование", "workout", "english", "брифинг", "витамины", "вода",
-            "спорт", "read", "meditate", "уборка", "чистить зубы", "прогулка", "study"
+            "routine", "habit", "exercise", "workout", "meditation", "meditate",
+            "reading", "read", "planning", "briefing", "vitamins", "water",
+            "sport", "cleaning", "brush teeth", "walk", "study", "english"
         ]
 
         today = datetime.now(config.msk_tz)
@@ -894,7 +899,7 @@ def get_habit_completion_array():
 # ai_pipeline.append_goal() can recognize it and replace it outright once a
 # real goal comes in, instead of leaving this generic filler sitting
 # alongside (and getting equal weight to) an actual stated goal forever.
-DEFAULT_GOALS_CONTENT = "# Мои долгосрочные цели\n\n* Улучшить здоровье и сон\n* Вести учет финансов\n* Повысить продуктивность"
+DEFAULT_GOALS_CONTENT = "# My Long-Term Goals\n\n* Improve health and sleep\n* Track my finances\n* Boost productivity"
 
 
 def read_or_create_goals():
@@ -907,40 +912,3 @@ def read_or_create_goals():
         write_file_to_drive(vault_files.GOALS, content)
     return content
 
-
-def get_user_profile():
-    """
-    Reads Profile.json from Google Drive. If it doesn't exist, initializes it.
-    """
-    try:
-        content = read_file_from_drive(vault_files.PROFILE)
-        if not content.strip():
-            profile = {"xp": 0, "level": 1}
-            write_file_to_drive(vault_files.PROFILE, json.dumps(profile))
-            return profile
-        return json.loads(content)
-    except Exception as e:
-        logger.error(f"[Profile] Error reading profile: {e}")
-        return {"xp": 0, "level": 1}
-
-
-def add_user_xp(amount):
-    """
-    Adds XP to the user profile and calculates the new level.
-    """
-    try:
-        def mutate(profile):
-            if not isinstance(profile, dict):
-                profile = {"xp": 0, "level": 1}
-            profile["xp"] = profile.get("xp", 0) + amount
-            profile["level"] = max(1, int(profile["xp"] / 100))
-            return profile
-
-        result = update_json_file_on_drive(vault_files.PROFILE, mutate, default_factory=lambda: {"xp": 0, "level": 1})
-        if result is None:
-            result = {"xp": 0, "level": 1}
-        logger.info(f"[Profile] Added {amount} XP. Current XP: {result.get('xp')}, Level: {result.get('level')}")
-        return result
-    except Exception as e:
-        logger.error(f"[Profile] Error adding XP: {e}")
-        return {"xp": 0, "level": 1}

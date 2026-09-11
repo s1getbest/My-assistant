@@ -134,16 +134,16 @@ def send_dynamic_reminder(chat_id, task_text, task_line=None):
     """
     try:
         prompt = apply_format_rule(
-            f"Ты личный строгий ассистент Павел. Сработало напоминание: '{task_text}'. Напиши короткое, очень емкое и мотивирующее сообщение прямо сейчас."
+            f"You are a strict personal assistant. A reminder just fired: '{task_text}'. Write a short, punchy, motivating message right now."
         )
         response = key_manager.generate_content(
             model=config.MODEL_COMPLEX,
             contents=prompt
         )
         raw_text = response.text or ""
-        reply = sanitize_telegram_text(raw_text) if not is_ai_response_empty(raw_text) else f"Пора делать: {task_text}"
+        reply = sanitize_telegram_text(raw_text) if not is_ai_response_empty(raw_text) else f"Time to do: {task_text}"
     except Exception:
-        reply = f"Пора делать: {task_text}"
+        reply = f"Time to do: {task_text}"
     try:
         import telebot
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
@@ -155,7 +155,7 @@ def send_dynamic_reminder(chat_id, task_text, task_line=None):
         btn_snooze_24h = telebot.types.InlineKeyboardButton("📅 Tomorrow", callback_data=f"task_snooze_24h:{task_token}")
         markup.add(btn_done, btn_snooze_1h, btn_snooze_24h)
 
-        bot.send_message(chat_id, f"⏰ **НАПОМИНАНИЕ!**\n\n{reply}", reply_markup=markup)
+        bot.send_message(chat_id, f"⏰ **REMINDER!**\n\n{reply}", reply_markup=markup)
     except Exception as e:
         logger.error(f"[Scheduler] Dynamic reminder send error: {e}")
 
@@ -169,7 +169,7 @@ def check_daily_sleep():
         if not has_health_entry_for_date("sleep", today_str):
             bot.send_message(
                 config.MY_TELEGRAM_ID,
-                "Павел, доброе утро! 🛌 Я заметил, что сегодня ты еще не записал свой сон. Расскажи, сколько часов удалось поспать и как самочувствие?",
+                "Good morning! 🛌 I noticed you haven't logged your sleep yet today. How many hours did you get, and how are you feeling?",
             )
     except Exception as e:
         logger.error(f"[Scheduler] Sleep check error: {e}")
@@ -182,7 +182,7 @@ def evening_planning_reminder():
     try:
         bot.send_message(
             config.MY_TELEGRAM_ID,
-            "Павел, время вечернего планирования! 🌙 Пора разобрать дела и составить план на завтра, чтобы лечь спать с чистой головой.",
+            "Time for evening planning! 🌙 Sort through your to-dos and set a plan for tomorrow, so you can go to bed with a clear head.",
         )
     except Exception as e:
         logger.error(f"[Scheduler] Evening reminder error: {e}")
@@ -335,7 +335,7 @@ def morning_briefing():
                 status = "[x]" if task.get("done") else "[ ]"
                 tasks_text += f"- {status} {task.get('time', '—')} | {task.get('text')}\n"
         else:
-            tasks_text = "Нет запланированных задач на сегодня."
+            tasks_text = "No tasks scheduled for today."
 
         review_cards = []
         if isinstance(flashcards, list):
@@ -351,10 +351,10 @@ def morning_briefing():
             overdue = [card for review_dt, card in sortable_cards if review_dt <= now]
             review_cards = overdue[:2]
 
-        review_text = "Нет карточек для повторения."
+        review_text = "No flashcards due for review."
         if review_cards:
             review_text = "\n".join(
-                f"🧠 Повторение: {card.get('q', '—')} -> {card.get('a', '—')}"
+                f"🧠 Review: {card.get('q', '—')} -> {card.get('a', '—')}"
                 for card in review_cards
             )
 
@@ -382,7 +382,7 @@ Long-term goals (Goals.md):
 {goals_content or "Empty."}
 ---
 
-Write a concise, inspiring morning briefing in Russian. Highlight key tasks, add review block, suggest ONE small actionable micro-task for today that advances long-term goals, and wish productive day. Be brief and to the point.
+Write a concise, inspiring morning briefing in English. Highlight key tasks, add review block, suggest ONE small actionable micro-task for today that advances long-term goals, and wish productive day. Be brief and to the point.
 """)
         response = key_manager.generate_content(
             model=config.MODEL_COMPLEX,
@@ -403,14 +403,14 @@ Write a concise, inspiring morning briefing in Russian. Highlight key tasks, add
 
         if review_cards:
             review_block = "\n".join(
-                f"🧠 Повторение: {card.get('q', '—')} -> {card.get('a', '—')}"
+                f"🧠 Review: {card.get('q', '—')} -> {card.get('a', '—')}"
                 for card in review_cards
             )
             brief_reply_clean = f"{brief_reply_clean}\n\n{review_block}"
 
         bot.send_message(
             config.MY_TELEGRAM_ID,
-            f"☀️ ЕЖЕДНЕВНЫЙ УТРЕННИЙ БРИФИНГ\n\n{brief_reply_clean}"
+            f"☀️ DAILY MORNING BRIEFING\n\n{brief_reply_clean}"
         )
 
         logger.info("[Scheduler] Morning briefing successfully sent.")
@@ -460,9 +460,9 @@ def weekly_audit():
         new_media = added_this_week("media")
         new_projects = added_this_week("projects")
         second_brain_summary = (
-            f"Новые люди: {', '.join(e.get('name', '?') for e in new_people) or 'нет'}\n"
-            f"Новые медиа (фильмы/аниме/книги/игры): {', '.join(e.get('title', '?') for e in new_media) or 'нет'}\n"
-            f"Новые проекты: {', '.join(e.get('name', '?') for e in new_projects) or 'нет'}"
+            f"New people: {', '.join(e.get('name', '?') for e in new_people) or 'none'}\n"
+            f"New media (movies/anime/books/games): {', '.join(e.get('title', '?') for e in new_media) or 'none'}\n"
+            f"New projects: {', '.join(e.get('name', '?') for e in new_projects) or 'none'}"
         )
 
         prompt = apply_format_rule(f"""Act as a strict but supportive life coach. Analyze this 7-day data.
@@ -472,20 +472,20 @@ Here is the data for the past 7 days (dates: {', '.join(dates[::-1])}):
 
 ### Tasks.md (7-day data):
 ---
-{tasks_7d or "Нет записей."}
+{tasks_7d or "No entries."}
 ---
 
 ### Finance.md (7-day data):
 ---
-{finance_7d or "Нет записей."}
+{finance_7d or "No entries."}
 ---
 
 ### Health.md (7-day data):
 ---
-{health_7d or "Нет записей."}
+{health_7d or "No entries."}
 ---
 
-### Second Brain (новое за неделю - люди/медиа/проекты):
+### Second Brain (new this week - people/media/projects):
 ---
 {second_brain_summary}
 ---
@@ -509,14 +509,14 @@ Write a comprehensive, professional, yet warm and inspiring Markdown report. Del
         try:
             bot.send_message(
                 config.MY_TELEGRAM_ID,
-                f"📊 **ЕЖЕНЕДЕЛЬНЫЙ ИНФОРМАЦИОННЫЙ АУДИТ (RESET)**\n\n{report}",
+                f"📊 **WEEKLY INFO AUDIT (RESET)**\n\n{report}",
                 parse_mode="Markdown"
             )
         except Exception as parse_err:
             logger.warning(f"[Scheduler] Telegram markdown parsing failed, trying HTML/plain: {parse_err}")
             bot.send_message(
                 config.MY_TELEGRAM_ID,
-                f"📊 ЕЖЕНЕДЕЛЬНЫЙ ИНФОРМАЦИОННЫЙ АУДИТ (RESET)\n\n{report}"
+                f"📊 WEEKLY INFO AUDIT (RESET)\n\n{report}"
             )
         logger.info("[Scheduler] Weekly audit successfully sent.")
     except Exception as e:
@@ -526,7 +526,7 @@ Write a comprehensive, professional, yet warm and inspiring Markdown report. Del
 def inject_todays_classes():
     """
     Daily job (ARCHITECTURE.md step 6): looks up today's classes in
-    Расписание.md (by day-of-week + week parity, computed deterministically
+    Schedule.md (by day-of-week + week parity, computed deterministically
     - not AI-parsed) and adds any missing ones to Tasks.md as todo items.
 
     Idempotent by design: safe to run more than once for the same day
@@ -561,7 +561,7 @@ def inject_todays_classes():
 
         update_file_on_drive(vault_files.TASKS, mutate)
         if added_count["n"]:
-            logger.info(f"[Scheduler] Added {added_count['n']} class(es) from Расписание.md to today's Tasks.md.")
+            logger.info(f"[Scheduler] Added {added_count['n']} class(es) from Schedule.md to today's Tasks.md.")
     except Exception as e:
         logger.error(f"[Scheduler] Error injecting today's classes: {e}")
 

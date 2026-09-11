@@ -15,7 +15,7 @@ Folder layout follows a PARA + Zettelkasten hybrid (see ARCHITECTURE.md):
   05-Media      - watched/read/played media entries
   06-People     - person cards
   07-Archive    - closed/stale items (e.g. Icebox.md)
-  08-System     - Profile.json, Flashcards.json, Memory.md, Questions.md, Index.json,
+  08-System     - Flashcards.json, Memory.md, Questions.md, Index.json,
                   HealthDetailed.json
 """
 
@@ -32,10 +32,9 @@ ICEBOX = "Icebox.md"
 RAW_INBOX = "Raw_Inbox.md"
 QUESTIONS = "Questions.md"
 FLASHCARDS = "Flashcards.json"
-PROFILE = "Profile.json"
 INDEX = "Index.json"  # entity/tag index - see ARCHITECTURE.md step 2, not populated yet
 HEALTH_DETAILED = "HealthDetailed.json"  # rich per-day wearable data - see ARCHITECTURE.md 8.18
-SCHEDULE = "Расписание.md"  # university weekly schedule - see university_schedule.py / ARCHITECTURE.md step 6
+SCHEDULE = "Schedule.md"  # university weekly schedule - see university_schedule.py / ARCHITECTURE.md step 6
 
 # === FOLDER NAMES (top-level, under config.FOLDER_ID) ===
 FOLDER_INBOX = "00-Inbox"
@@ -71,10 +70,10 @@ INBOX_FILES = (INBOX, RAW_INBOX, QUESTIONS)
 ARCHIVE_FILES = (ICEBOX,)
 
 # Files that live in "08-System".
-SYSTEM_FILES = (FLASHCARDS, PROFILE, GOALS, MEMORY, INDEX, HEALTH_DETAILED)
+SYSTEM_FILES = (FLASHCARDS, GOALS, MEMORY, INDEX, HEALTH_DETAILED)
 
 # Files that live in "03-Areas". ARCHITECTURE.md originally sketched
-# Расписание.md as living in a nested "03-Areas/Учёба/" subfolder, but
+# Schedule.md as living in a nested "03-Areas/Study/" subfolder, but
 # _get_or_create_folder only creates folders directly under config.FOLDER_ID
 # (no nested-folder support yet) - simplified to live directly in 03-Areas
 # for this one file rather than building nested-folder creation for it.

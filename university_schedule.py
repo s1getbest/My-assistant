@@ -1,28 +1,31 @@
 """
 University weekly schedule (ARCHITECTURE.md step 6).
 
-The schedule is entered by the user via the /update_schedule Telegram
-command, not scraped from the university's website - it changes rarely,
-and a parsing mistake here is costly (wrong day/time for a class), so a
-strict, deterministically-parseable format is used instead of freeform
-AI recognition.
+The schedule is entered by editing Schedule.md directly in Drive (no bot
+command for it - see ARCHITECTURE.md 8.19: a single-user vault, edited by
+hand for something that changes once a semester, is simpler than
+maintaining a dedicated command for it). It's not scraped from the
+university's website either - a parsing mistake here is costly (wrong
+day/time for a class), so a strict, deterministically-parseable format is
+used instead of freeform AI recognition.
 
-Expected format of the text sent to /update_schedule (whole message body):
+Expected format of Schedule.md:
 
-    ## Нечётная
-    Пн: 09:00 Матан; 10:40 Физика
-    Вт: 12:20 Английский
+    ## Odd
+    Mon: 09:00 Calculus; 10:40 Physics
+    Tue: 12:20 English
     ...
-    ## Чётная
-    Пн: 09:00 История
+    ## Even
+    Mon: 09:00 History
     ...
 
-- Section headers start with "не" (any case/ё-е spelling) for the odd
-  ("числитель") week, anything else starting with a day-section marker for
-  the even ("знаменатель") week.
-- Day lines start with a 2-letter (or longer) Russian day abbreviation
-  (Пн/Вт/Ср/Чт/Пт/Сб/Вс) followed by ":". Multiple classes on one day are
-  separated by ";", each as "HH:MM Subject".
+- Section headers start with "odd" (any case) for the odd week, anything
+  else starting with a day-section marker for the even week.
+- Day lines start with a 3-letter (or longer) English day abbreviation
+  (Mon/Tue/Wed/Thu/Fri/Sat/Sun) followed by ":". Multiple classes on one
+  day are separated by ";", each as "HH:MM Subject". Teacher/room can be
+  included directly in the subject text, e.g. "Calculus (Dr. Smith, room
+  305)" - parse_day_classes treats it as free text either way.
 - A day with no line simply has no classes that week.
 
 Week parity for a given calendar date is computed from a semester anchor
@@ -43,11 +46,11 @@ logger = get_logger(__name__)
 # Monday of "week 1" for parity-counting purposes, and that week's parity.
 # 2026-08-31 (Monday) was a public holiday with no classes, but it's still
 # the Monday of week 1 - actual first classes were Tuesday 2026-09-01,
-# which falls in that same week 1 = odd ("числитель").
+# which falls in that same week 1 = odd.
 SEMESTER_ANCHOR_MONDAY = date(2026, 8, 31)
 SEMESTER_ANCHOR_PARITY = "odd"
 
-_DAY_NAMES = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]  # index 0 = Monday, matches date.weekday()
+_DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]  # index 0 = Monday, matches date.weekday()
 
 _SECTION_RE = re.compile(r'^##\s*(\S+)', re.MULTILINE)
 
@@ -65,8 +68,8 @@ def get_week_parity(for_date):
 def split_sections(text):
     """
     Splits the raw schedule text into {"odd": section_text, "even": section_text}
-    by "## ..." headers. A header is treated as "odd" if it starts with "не"
-    (Нечётная/нечетная/...), otherwise "even". Missing sections are simply
+    by "## ..." headers. A header is treated as "odd" if it starts with "odd"
+    (case-insensitive), otherwise "even". Missing sections are simply
     absent from the returned dict. Returns {} if no "## " headers are found
     at all (malformed input).
     """
@@ -74,7 +77,7 @@ def split_sections(text):
     matches = list(_SECTION_RE.finditer(text))
     for i, m in enumerate(matches):
         label = m.group(1).strip().lower()
-        parity = "odd" if label.startswith("не") else "even"
+        parity = "odd" if label.startswith("odd") else "even"
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         sections[parity] = text[start:end].strip()
@@ -110,9 +113,12 @@ def parse_day_classes(section_text, day_index):
 
 def save_schedule(raw_text):
     """
-    Overwrites Расписание.md wholesale - see module docstring on why no
+    Overwrites Schedule.md wholesale - see module docstring on why no
     merging. Folder routing (03-Areas) is resolved automatically by
-    drive_service via vault_files.AREAS_FILES.
+    drive_service via vault_files.AREAS_FILES. Kept for any future
+    programmatic caller; the bot itself no longer has a command that
+    calls this (see ARCHITECTURE.md 8.19) - the user edits Schedule.md
+    directly in Drive.
     """
     write_file_to_drive(vault_files.SCHEDULE, raw_text.strip() + "\n")
 
@@ -124,7 +130,7 @@ def read_schedule():
 def get_classes_for_date(for_date):
     """
     Returns [(time_str, subject), ...] for `for_date`, sorted by time,
-    using the current Расписание.md content and the correct week-parity
+    using the current Schedule.md content and the correct week-parity
     section. Returns [] if nothing is scheduled or the file is empty/unparseable.
     """
     raw = read_schedule()

@@ -2,7 +2,7 @@
 Index.json - a lightweight registry of known tags/people/projects/media so
 the Archivist agent (ARCHITECTURE.md step 3) can reuse existing entities
 and tags instead of creating duplicates (e.g. a second card for the same
-person, or "Продуктивность" and "productivity" as two different tags).
+person, or "Productivity" and "productivity" as two different tags).
 
 Wired into apply_gemini_tags() (ai_pipeline.py, ARCHITECTURE.md step 3) for
 Media/Person/Project entity resolution, and into the /who Telegram command
@@ -34,9 +34,9 @@ logger = get_logger(__name__)
 
 # Similarity ratio (difflib.SequenceMatcher) above which a name/title with
 # no exact match is treated as the same entity - catches typos and minor
-# spelling variants ("Атака Тетанов" vs "Атака Титанов"). This is a plain
+# spelling variants ("Attak on Titan" vs "Attack on Titan"). This is a plain
 # string-similarity check, not a semantic one - it will NOT catch
-# diminutives or aliases ("Ваня" vs "Иван"), which are too dissimilar as
+# diminutives or aliases ("Vanya" vs "Ivan"), which are too dissimilar as
 # strings; that class of duplicate would need an LLM or a curated alias
 # list, deliberately out of scope here (see ARCHITECTURE.md).
 #
@@ -56,9 +56,9 @@ _TRAILING_NUMBER_RE = re.compile(r'\s*\d+\s*$')
 def _differs_only_by_trailing_number(a, b):
     """
     True if `a` and `b` are identical once a trailing number is stripped
-    from each, but the original strings differ - e.g. "Диплом" vs
-    "Диплом2", "Наруто 2" vs "Наруто 3", "Атака Титанов" vs "Атака
-    Титанов 2". These are almost always a different season/sequel/
+    from each, but the original strings differ - e.g. "Thesis" vs
+    "Thesis2", "Naruto 2" vs "Naruto 3", "Attack on Titan" vs "Attack
+    on Titan 2". These are almost always a different season/sequel/
     revision, not a typo of the same entity, so they're excluded from the
     fuzzy match regardless of how high their raw similarity ratio is.
     """

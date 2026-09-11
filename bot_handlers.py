@@ -5,7 +5,6 @@ import telebot
 from google.genai import types
 import config
 import vault_files
-import university_schedule
 import vault_index
 import srs
 import note_templates
@@ -22,7 +21,6 @@ from drive_service import (
     read_file_from_drive,
     update_file_on_drive,
     update_json_file_on_drive,
-    add_user_xp,
     append_line_to_drive,
 )
 from ai_pipeline import (
@@ -40,7 +38,7 @@ from ai_pipeline import (
 
 logger = get_logger(__name__)
 
-AI_UNAVAILABLE_MESSAGE = "Извини, сервис ИИ сейчас временно недоступен или перегружен. Попробуй, пожалуйста, ещё раз через минуту."
+AI_UNAVAILABLE_MESSAGE = "Sorry, the AI service is temporarily unavailable or overloaded right now. Please try again in a minute."
 
 
 class StatusMessage:
@@ -55,7 +53,7 @@ class StatusMessage:
     a reply the user is actually waiting for.
     """
 
-    def __init__(self, message, initial_text="🧠 Думаю..."):
+    def __init__(self, message, initial_text="🧠 Thinking..."):
         self._chat_id = message.chat.id
         self._message_id = None
         self._last_text = None
@@ -76,7 +74,7 @@ class StatusMessage:
             logger.warning(f"[StatusMessage] Failed to update status message: {e}")
 
     def finish(self, final_text):
-        final_text = final_text or "Готово."
+        final_text = final_text or "Done."
         if not self._message_id:
             try:
                 bot.send_message(self._chat_id, final_text)
@@ -97,11 +95,11 @@ def _fallback_note(response):
     """
     Small suffix appended to a reply when key_manager had to rotate to a
     different API key or fall back to MODEL_LITE to get this response
-    (ARCHITECTURE.md step 5's "прозрачность процесса" - the user asked to
+    (ARCHITECTURE.md step 5's "process transparency" - the user asked to
     see when the bot switched to a backup instead of it happening silently).
     """
     if getattr(response, "used_fallback", False):
-        return "\n\n⚡ (ответ подготовлен через резервный ключ/модель — основной сервис был временно недоступен)"
+        return "\n\n⚡ (this reply was generated via a backup key/model — the primary service was temporarily unavailable)"
     return ""
 
 
@@ -226,28 +224,27 @@ User thought: "{user_message}"
 
 # === BOT HANDLERS ===
 
-HELP_TEXT = """🧠 Твой личный второй мозг. Просто пиши обычным текстом, голосом или фото — я сам пойму, что с этим делать (задача, трата, заметка, фильм, человек, проект...).
+HELP_TEXT = """🧠 Your personal second brain. Just write plain text, voice, or a photo — I'll figure out what to do with it (task, expense, note, movie, person, project...).
 
-Команды:
-/sleep <часы> — записать сон, например /sleep 7.5
-/steps <число> — записать шаги за день, например /steps 9500
-/pulse <уд/мин> — записать пульс, например /pulse 62
-/stress <1-10> — записать уровень стресса, например /stress 4
-/distance <км> — записать дистанцию, например /distance 5.4
-/calories <число> — записать калории, например /calories 2150
-/health_report — ИИ-анализ всей накопленной истории здоровья: тренды, отклонения, рекомендации
-/journal <текст> — личный дневник/рефлексия (можно ответить на сообщение)
-/quiz — повторить карточки (Anki-стиль, есть и в мини-аппе)
-/who <имя> — карточка человека/медиа/проекта прямо в чат
-/brain <вопрос> — спросить у Второго Мозга (Tasks/Finance/Health/Memory/Goals + люди/медиа/проекты)
-/search <запрос> — поиск по всем заметкам в Obsidian
-/update_schedule — обновить расписание вуза (формат — спроси отдельно)
-/digest — разобрать Raw_Inbox.md (внешние заметки) на задачи/вопросы
-/process — разобрать Inbox.md на заметки/карточки
+Commands:
+/sleep <hours> — log sleep, e.g. /sleep 7.5
+/steps <number> — log today's steps, e.g. /steps 9500
+/pulse <bpm> — log heart rate, e.g. /pulse 62
+/stress <1-10> — log stress level, e.g. /stress 4
+/distance <km> — log distance, e.g. /distance 5.4
+/calories <number> — log calories, e.g. /calories 2150
+/health_report — AI analysis of your whole health history: trends, deviations, recommendations
+/journal <text> — personal diary/reflection (can also reply to a message)
+/quiz — review flashcards (Anki-style, also available in the mini-app)
+/who <name> — pull up a person/media/project card right in the chat
+/brain <question> — ask your Second Brain (Tasks/Finance/Health/Memory/Goals + people/media/projects)
+/search <query> — full-text search across all your Obsidian notes
+/digest — parse Raw_Inbox.md (external notes) into tasks/questions
+/process — parse Inbox.md into notes/flashcards
 
-📍 Отправь геолокацию (скрепка → Локация) — запишу её в Location.md.
+📍 Share your location (paperclip → Location) — I'll log it to Location.md.
 
-Открой кнопку меню рядом с полем ввода — там дашборд со статистикой, задачами, финансами и повторением карточек."""
+Open the menu button next to the input field — that's the dashboard with stats, tasks, finances, and flashcard review."""
 
 
 @bot.message_handler(commands=['start', 'help'])
@@ -265,15 +262,14 @@ def track_sleep(message):
     try:
         args = message.text.split()
         if len(args) < 2:
-            bot.reply_to(message, "Укажи часы сна. Пример: `/sleep 7.5`", parse_mode="Markdown")
+            bot.reply_to(message, "Tell me the hours slept. Example: `/sleep 7.5`", parse_mode="Markdown")
             return
         hours = args[1]
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
         append_line_to_drive(vault_files.HEALTH, f"* {today_str}: {hours}")
-        add_user_xp(5)
-        bot.reply_to(message, f"🛌 **Сон записан!** (+5 XP)\n\n> {today_str} · {hours} ч.")
+        bot.reply_to(message, f"🛌 **Sleep logged!**\n\n> {today_str} · {hours} h")
     except Exception as e:
-        bot.reply_to(message, f"Ошибка записи сна: {e}")
+        bot.reply_to(message, f"Error logging sleep: {e}")
 
 
 @bot.message_handler(commands=['steps'])
@@ -284,14 +280,14 @@ def track_steps(message):
     try:
         args = message.text.split()
         if len(args) < 2:
-            bot.reply_to(message, "Укажи количество шагов. Пример: `/steps 9500`", parse_mode="Markdown")
+            bot.reply_to(message, "Tell me the step count. Example: `/steps 9500`", parse_mode="Markdown")
             return
         steps = args[1]
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
         append_health_metric("Steps", f"{today_str}: {steps}")
-        bot.reply_to(message, f"🚶 **Шаги записаны!** (+5 XP)\n\n> {today_str} · {steps} шагов")
+        bot.reply_to(message, f"🚶 **Steps logged!**\n\n> {today_str} · {steps} steps")
     except Exception as e:
-        bot.reply_to(message, f"Ошибка записи шагов: {e}")
+        bot.reply_to(message, f"Error logging steps: {e}")
 
 
 @bot.message_handler(commands=['pulse'])
@@ -302,14 +298,14 @@ def track_pulse(message):
     try:
         args = message.text.split()
         if len(args) < 2:
-            bot.reply_to(message, "Укажи пульс (уд/мин). Пример: `/pulse 62`", parse_mode="Markdown")
+            bot.reply_to(message, "Tell me your heart rate (bpm). Example: `/pulse 62`", parse_mode="Markdown")
             return
         bpm = args[1]
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
         append_health_metric("HR", f"{today_str}: {bpm}")
-        bot.reply_to(message, f"❤️ **Пульс записан!** (+5 XP)\n\n> {today_str} · {bpm} уд/мин")
+        bot.reply_to(message, f"❤️ **Heart rate logged!**\n\n> {today_str} · {bpm} bpm")
     except Exception as e:
-        bot.reply_to(message, f"Ошибка записи пульса: {e}")
+        bot.reply_to(message, f"Error logging heart rate: {e}")
 
 
 @bot.message_handler(commands=['stress'])
@@ -320,14 +316,14 @@ def track_stress(message):
     try:
         args = message.text.split()
         if len(args) < 2:
-            bot.reply_to(message, "Укажи уровень стресса 1-10. Пример: `/stress 4`", parse_mode="Markdown")
+            bot.reply_to(message, "Tell me the stress level 1-10. Example: `/stress 4`", parse_mode="Markdown")
             return
         level = args[1]
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
         append_health_metric("Stress", f"{today_str}: {level}")
-        bot.reply_to(message, f"🧘 **Стресс записан!** (+5 XP)\n\n> {today_str} · {level}/10")
+        bot.reply_to(message, f"🧘 **Stress logged!**\n\n> {today_str} · {level}/10")
     except Exception as e:
-        bot.reply_to(message, f"Ошибка записи стресса: {e}")
+        bot.reply_to(message, f"Error logging stress: {e}")
 
 
 @bot.message_handler(commands=['distance'])
@@ -338,14 +334,14 @@ def track_distance(message):
     try:
         args = message.text.split()
         if len(args) < 2:
-            bot.reply_to(message, "Укажи дистанцию в км. Пример: `/distance 5.4`", parse_mode="Markdown")
+            bot.reply_to(message, "Tell me the distance in km. Example: `/distance 5.4`", parse_mode="Markdown")
             return
         km = args[1]
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
         append_health_metric("Distance", f"{today_str}: {km}")
-        bot.reply_to(message, f"🏃 **Дистанция записана!** (+5 XP)\n\n> {today_str} · {km} км")
+        bot.reply_to(message, f"🏃 **Distance logged!**\n\n> {today_str} · {km} km")
     except Exception as e:
-        bot.reply_to(message, f"Ошибка записи дистанции: {e}")
+        bot.reply_to(message, f"Error logging distance: {e}")
 
 
 @bot.message_handler(commands=['calories'])
@@ -356,16 +352,14 @@ def track_calories(message):
     try:
         args = message.text.split()
         if len(args) < 2:
-            bot.reply_to(message, "Укажи калории. Пример: `/calories 2150`", parse_mode="Markdown")
+            bot.reply_to(message, "Tell me the calories. Example: `/calories 2150`", parse_mode="Markdown")
             return
         kcal = args[1]
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
         append_health_metric("Calories", f"{today_str}: {kcal}")
-        bot.reply_to(message, f"🔥 **Калории записаны!** (+5 XP)\n\n> {today_str} · {kcal} ккал")
+        bot.reply_to(message, f"🔥 **Calories logged!**\n\n> {today_str} · {kcal} kcal")
     except Exception as e:
-        bot.reply_to(message, f"Ошибка записи калорий: {e}")
-
-
+        bot.reply_to(message, f"Error logging calories: {e}")
 
 
 @bot.message_handler(commands=['health_report'])
@@ -397,38 +391,38 @@ def handle_health_report(message):
         if not health_content.strip() and not detailed_data:
             bot.reply_to(
                 message,
-                "Пока нет данных для анализа. Начни вести показатели командами `/sleep`, `/steps`, "
-                "`/pulse`, `/stress` и т.п. (или заполни `HealthDetailed.json` вручную в Drive).",
+                "No data to analyze yet. Start logging with `/sleep`, `/steps`, "
+                "`/pulse`, `/stress`, etc. (or fill in `HealthDetailed.json` by hand in Drive).",
                 parse_mode="Markdown",
             )
             return
 
-        status = StatusMessage(message, "📊 Анализирую историю здоровья...")
+        status = StatusMessage(message, "📊 Analyzing health history...")
         detailed_json_text = (
             json.dumps(detailed_data, ensure_ascii=False, indent=2)
             if isinstance(detailed_data, dict) and detailed_data
-            else "Нет подробных данных."
+            else "No detailed data."
         )
 
-        prompt = apply_format_rule(f"""Ты — аналитик данных здоровья. Проанализируй всю историю ниже и дай содержательный отчёт на русском языке.
+        prompt = apply_format_rule(f"""You are a health data analyst. Analyze the entire history below and give a substantive report in English.
 
-Ищи:
-- Тренды во времени (сон, пульс, стресс, шаги, калории) — улучшается/ухудшается/стабильно.
-- Отклонения и аномалии — дни или периоды, сильно выбивающиеся из общей картины.
-- Возможные взаимосвязи между показателями (например, между сном и стрессом, активностью и настроением).
-- Конкретные, применимые рекомендации, а не общие фразы.
+Look for:
+- Trends over time (sleep, heart rate, stress, steps, calories) — improving/worsening/stable.
+- Deviations and anomalies — days or periods that stand out sharply from the overall pattern.
+- Possible correlations between metrics (e.g. between sleep and stress, activity and mood).
+- Concrete, actionable recommendations, not generic phrases.
 
-Простой ежедневный лог (Health.md):
+Simple daily log (Health.md):
 ---
-{health_content or "Пусто."}
+{health_content or "Empty."}
 ---
 
-Подробные данные по дням (фазы сна, диапазон пульса, распределение стресса и т.п.):
+Detailed per-day data (sleep phases, heart rate range, stress distribution, etc.):
 ---
 {detailed_json_text}
 ---
 
-Структурируй ответ по разделам: Сон, Пульс, Стресс, Активность, Общие выводы. Называй конкретные даты, если это уместно, а не только общие фразы.
+Structure your answer into sections: Sleep, Heart Rate, Stress, Activity, Overall Conclusions. Cite specific dates where relevant, not just generalities.
 """)
         response = key_manager.generate_content(model=config.MODEL_COMPLEX, contents=prompt)
         raw_text = response.text or ""
@@ -437,7 +431,7 @@ def handle_health_report(message):
             return
         status.finish(sanitize_telegram_text(raw_text) + _fallback_note(response))
     except Exception as e:
-        bot.reply_to(message, f"Ошибка анализа: {e}")
+        bot.reply_to(message, f"Error analyzing: {e}")
 
 
 def _send_next_due_flashcard(chat_id):
@@ -467,13 +461,13 @@ def _send_next_due_flashcard(chat_id):
 
     due_cards.sort(key=lambda item: item[0])
     if not due_cards:
-        bot.send_message(chat_id, "🎉 Нет карточек для повторения!")
+        bot.send_message(chat_id, "🎉 No flashcards due for review!")
         return
 
     card = due_cards[0][1]
     keyboard = telebot.types.InlineKeyboardMarkup()
-    keyboard.add(telebot.types.InlineKeyboardButton("Показать ответ", callback_data=f"show_answer:{card['id']}"))
-    bot.send_message(chat_id, f"🎓 **Вопрос:**\n\n{card['q']}", reply_markup=keyboard, parse_mode="Markdown")
+    keyboard.add(telebot.types.InlineKeyboardButton("Show answer", callback_data=f"show_answer:{card['id']}"))
+    bot.send_message(chat_id, f"🎓 **Question:**\n\n{card['q']}", reply_markup=keyboard, parse_mode="Markdown")
 
 
 @bot.message_handler(commands=['quiz'])
@@ -484,7 +478,7 @@ def quiz_flashcards(message):
     try:
         _send_next_due_flashcard(message.chat.id)
     except Exception as e:
-        bot.reply_to(message, f"Ошибка загрузки карточки: {e}")
+        bot.reply_to(message, f"Error loading flashcard: {e}")
 
 
 @bot.message_handler(content_types=['voice'])
@@ -495,14 +489,14 @@ def handle_voice(message):
     if not is_me(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
-    status = StatusMessage(message, "🎙️ Слушаю голосовое...")
+    status = StatusMessage(message, "🎙️ Listening to voice message...")
     try:
         voice_info = bot.get_file(message.voice.file_id)
         downloaded_file = bot.download_file(voice_info.file_path)
 
         current_memory = read_file_from_drive(vault_files.MEMORY)
         if not current_memory.strip():
-            current_memory = "Пока пустая долгосрочная память."
+            current_memory = "Long-term memory is still empty."
 
         now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
@@ -515,42 +509,42 @@ def handle_voice(message):
             is_journal = True
 
         if is_journal:
-            prompt = apply_format_rule(f"""Текущее время в Москве: {now_msk}
-Сегодняшняя дата: {today_str}
+            prompt = apply_format_rule(f"""Current time in Moscow: {now_msk}
+Today's date: {today_str}
 
-Пользователь прислал голосовую запись в свой личный дневник (Journal).
-Внимательно прослушай аудиофайл и распознай глубокие размышления Павла.
+The user sent a voice recording for their personal journal.
+Listen carefully to the audio and recognize S1get's deep reflections.
 
 Act as an empathetic listener and coach. Respond with a short, supportive reply. At the very end of your response, add a tag: `[JOURNAL] transcript_or_faithful_summary`, containing a faithful transcript (or, if speech was unclear in places, a close paraphrase) of what the user actually said - this is the diary entry itself and gets saved verbatim, so do not shorten it into a generic summary.
 
-Помимо тега, начни свой живой поддерживающий ответ с [ОТВЕТ], чтобы отделить живой ответ от тега.
+Besides the tag, start your warm, supportive reply with [REPLY] to separate the live reply from the tag.
 
-Формат ответа:
-[ОТВЕТ]
-Твой ответ пользователю на русском языке
-[JOURNAL] Транскрипт или точный пересказ того, что сказал пользователь
+Reply format:
+[REPLY]
+Your reply to the user in English
+[JOURNAL] Transcript or faithful paraphrase of what the user said
 """)
         else:
             extraction_rules = get_extraction_rules(today_str)
-            prompt = apply_format_rule(f"""Текущее время в Москве: {now_msk}
-Сегодняшняя дата: {today_str}
+            prompt = apply_format_rule(f"""Current time in Moscow: {now_msk}
+Today's date: {today_str}
 
-Долгосрочная память (Memory.md):
+Long-term memory (Memory.md):
 ---
 {current_memory}
 ---
 
-Пользователь прислал голосовое сообщение. Текст голосового сообщения находится в прикрепленном аудиофайле.
-Внимательно прослушай аудиофайл и распознай, что говорит S1get.
+The user sent a voice message. The voice message's content is in the attached audio file.
+Listen carefully to the audio and recognize what S1get is saying.
 
-Ответь чётко и по делу. В [ОТВЕТ] — только живой ответ пользователю, без дублирования памяти.
+Reply clearly and to the point. In [REPLY] — only the live reply to the user, without repeating memory content.
 
 {extraction_rules}
 
-Формат ответа:
-[ОТВЕТ]
-Твой ответ пользователю
-(далее теги, если нужны — каждый с новой строки)
+Reply format:
+[REPLY]
+Your reply to the user
+(then tags, if needed — each on a new line)
 """)
         # Voice messages always use MODEL_COMPLEX
         response = key_manager.generate_content(
@@ -574,7 +568,7 @@ Act as an empathetic listener and coach. Respond with a short, supportive reply.
 
         status.finish(reply_part + _fallback_note(response))
     except Exception as e:
-        status.finish(f"Ошибка обработки голосового сообщения: {e}")
+        status.finish(f"Error processing voice message: {e}")
 
 
 @bot.message_handler(content_types=['location'])
@@ -603,11 +597,11 @@ def handle_location(message):
         now_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
         maps_link = f"https://maps.google.com/?q={loc.latitude},{loc.longitude}"
         is_live = bool(getattr(loc, "live_period", None))
-        label = "Live-геолокация (начало)" if is_live else "Геолокация"
+        label = "Live location (start)" if is_live else "Location"
         append_line_to_drive(vault_files.LOCATION, f"* {now_str}: {label} — {maps_link}")
-        bot.reply_to(message, f"📍 {label} записана.")
+        bot.reply_to(message, f"📍 {label} logged.")
     except Exception as e:
-        bot.reply_to(message, f"Ошибка записи геолокации: {e}")
+        bot.reply_to(message, f"Error logging location: {e}")
 
 
 @bot.message_handler(content_types=['photo'])
@@ -618,7 +612,7 @@ def handle_photo(message):
     if not is_me(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
-    status = StatusMessage(message, "🖼️ Смотрю изображение...")
+    status = StatusMessage(message, "🖼️ Looking at the image...")
     try:
         # Get highest resolution photo
         photo = message.photo[-1]
@@ -631,20 +625,20 @@ def handle_photo(message):
         caption = message.caption or ""
         extraction_rules = get_extraction_rules(today_str)
 
-        prompt = apply_format_rule(f"""Текущее время в Москве: {now_msk}
-Сегодняшняя дата: {today_str}
+        prompt = apply_format_rule(f"""Current time in Moscow: {now_msk}
+Today's date: {today_str}
 
-Пользователь прислал изображение. Вот его описание/подпись (если есть): "{caption}"
+The user sent an image. Here is its caption (if any): "{caption}"
 
 Analyze this image. If it's a receipt, calculate the total and output `[FINANCE] YYYY-MM-DD: amount | category | description`. If it's handwritten notes or a whiteboard, extract actionable items as `[TASK_ADD] YYYY-MM-DD HH:MM | Task`. If it's an article/screenshot, summarize it as `[MEMORY] summary`.
 {extraction_rules}
 
-Помимо тегов, напиши пользователю краткий содержательный ответ/комментарий. Начни свой ответ с [ОТВЕТ], чтобы отделить живой ответ от тегов.
+Besides the tags, write the user a brief, substantive reply/comment. Start your reply with [REPLY] to separate the live reply from the tags.
 
-Формат ответа:
-[ОТВЕТ]
-Твой ответ пользователю
-(далее теги, если нужны — каждый с новой строки)
+Reply format:
+[REPLY]
+Your reply to the user
+(then tags, if needed — each on a new line)
 """)
 
         response = key_manager.generate_content(
@@ -668,7 +662,7 @@ Analyze this image. If it's a receipt, calculate the total and output `[FINANCE]
 
         status.finish(reply_part + _fallback_note(response))
     except Exception as e:
-        status.finish(f"Ошибка обработки изображения: {e}")
+        status.finish(f"Error processing image: {e}")
 
 
 @bot.inline_handler(func=lambda query: len(query.query) > 0)
@@ -684,13 +678,13 @@ def handle_inline_query(inline_query):
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
         extraction_rules = get_extraction_rules(today_str)
 
-        prompt = apply_format_rule(f"""Текущее время в Москве: {now_msk}
-Сегодняшняя дата: {today_str}
+        prompt = apply_format_rule(f"""Current time in Moscow: {now_msk}
+Today's date: {today_str}
 
-Пользователь отправил быструю заметку через Inline-режим: "{text}"
+The user sent a quick note via inline mode: "{text}"
 
 {extraction_rules}
-Пожалуйста, будь точен в распознавании. Никакого другого текста писать НЕ нужно, только теги с новой строки (если применимо).
+Please be precise in recognition. Do NOT write any other text, only tags on new lines (if applicable).
 """)
         response = key_manager.generate_content(
             model=config.MODEL_LITE,
@@ -703,9 +697,9 @@ def handle_inline_query(inline_query):
                 id='1',
                 title='⚠️ AI service unavailable',
                 input_message_content=telebot.types.InputTextMessageContent(
-                    message_text=f"⚠️ Не удалось распознать (сервис ИИ недоступен): {text}"
+                    message_text=f"⚠️ Couldn't process (AI service unavailable): {text}"
                 ),
-                description="Ничего не сохранено — попробуйте ещё раз позже."
+                description="Nothing was saved — please try again later."
             )
             bot.answer_inline_query(inline_query.id, [r], cache_time=1)
             return
@@ -718,9 +712,9 @@ def handle_inline_query(inline_query):
             id='1',
             title='✅ Task/Data captured!',
             input_message_content=telebot.types.InputTextMessageContent(
-                message_text=f"✅ Успешно записано в Time OS: {text}"
+                message_text=f"✅ Successfully saved to Time OS: {text}"
             ),
-            description=f"Распознать и сохранить: {text}"
+            description=f"Recognize and save: {text}"
         )
         bot.answer_inline_query(inline_query.id, [r], cache_time=1)
     except Exception as e:
@@ -733,7 +727,7 @@ def handle_task_callback(call):
     Callback query handler for interactive notifications.
     """
     if call.from_user.id != config.MY_TELEGRAM_ID:
-        bot.answer_callback_query(call.id, "Ошибка: Доступ запрещен.", show_alert=True)
+        bot.answer_callback_query(call.id, "Error: Access denied.", show_alert=True)
         return
     try:
         action, task_token = call.data.split(':', 1)
@@ -748,18 +742,17 @@ def handle_task_callback(call):
             updated_line = mark_task_done_by_token(task_token)
             task_text = extract_task_text_from_line(updated_line)
             if updated_line:
-                add_user_xp(10)
-                bot.answer_callback_query(call.id, "Отмечено как выполнено! +10 XP")
-                bot.send_message(call.message.chat.id, f"✅ Выполнено: **{task_text}** (+10 XP)", parse_mode="Markdown")
+                bot.answer_callback_query(call.id, "Marked as done!")
+                bot.send_message(call.message.chat.id, f"✅ Done: **{task_text}**", parse_mode="Markdown")
             else:
-                bot.answer_callback_query(call.id, "Задача уже выполнена или не найдена.")
-                bot.send_message(call.message.chat.id, "✅ Задача уже обработана или не найдена.", parse_mode="Markdown")
+                bot.answer_callback_query(call.id, "Task already done or not found.")
+                bot.send_message(call.message.chat.id, "✅ Task already handled or not found.", parse_mode="Markdown")
 
         elif action in ["task_snooze_1h", "task_snooze_24h"]:
             delay_hours = 1 if "1h" in action else 24
             old_task_line = get_task_line_by_token(task_token)
             if not old_task_line:
-                bot.answer_callback_query(call.id, "Исходная задача не найдена.", show_alert=True)
+                bot.answer_callback_query(call.id, "Original task not found.", show_alert=True)
                 return
 
             task_text = extract_task_text_from_line(old_task_line)
@@ -770,18 +763,18 @@ def handle_task_callback(call):
             delete_line_from_task_file(old_task_line)
             append_line_to_drive(vault_files.TASKS, new_task_line)
             schedule_reminder_job(config.MY_TELEGRAM_ID, task_text, run_date, task_line=new_task_line)
-            bot.answer_callback_query(call.id, f"Отложено на {delay_hours} ч.")
-            bot.send_message(call.message.chat.id, f"⏰ Напоминание **{task_text}** успешно отложено на {delay_hours} ч.", parse_mode="Markdown")
+            bot.answer_callback_query(call.id, f"Snoozed for {delay_hours}h.")
+            bot.send_message(call.message.chat.id, f"⏰ Reminder **{task_text}** successfully snoozed for {delay_hours}h.", parse_mode="Markdown")
 
     except Exception as e:
         logger.error(f"[Callback Error] Error handling task callback: {e}")
-        bot.answer_callback_query(call.id, "Произошла ошибка при обработке.")
+        bot.answer_callback_query(call.id, "An error occurred while processing.")
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('show_answer:'))
 def handle_show_answer(call):
     if call.from_user.id != config.MY_TELEGRAM_ID:
-        bot.answer_callback_query(call.id, "Ошибка: Доступ запрещен.", show_alert=True)
+        bot.answer_callback_query(call.id, "Error: Access denied.", show_alert=True)
         return
     try:
         card_id = call.data.split(':', 1)[1]
@@ -796,7 +789,7 @@ def handle_show_answer(call):
                 break
 
         if not card:
-            bot.answer_callback_query(call.id, "Карточка не найдена.", show_alert=True)
+            bot.answer_callback_query(call.id, "Card not found.", show_alert=True)
             return
 
         keyboard = telebot.types.InlineKeyboardMarkup()
@@ -812,14 +805,14 @@ def handle_show_answer(call):
         bot.edit_message_text(
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
-            text=f"🎓 **Вопрос:**\n\n{card['q']}\n\n💡 **Ответ:**\n\n{card['a']}",
+            text=f"🎓 **Question:**\n\n{card['q']}\n\n💡 **Answer:**\n\n{card['a']}",
             reply_markup=keyboard,
             parse_mode="Markdown"
         )
         bot.answer_callback_query(call.id)
     except Exception as e:
         logger.error(f"[Quiz Callback] Error showing answer: {e}")
-        bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
+        bot.answer_callback_query(call.id, f"Error: {e}", show_alert=True)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('srs:'))
@@ -831,7 +824,7 @@ def handle_srs_review(call):
     real spaced repetition).
     """
     if call.from_user.id != config.MY_TELEGRAM_ID:
-        bot.answer_callback_query(call.id, "Ошибка: Доступ запрещен.", show_alert=True)
+        bot.answer_callback_query(call.id, "Error: Access denied.", show_alert=True)
         return
     try:
         _, card_id, rating = call.data.split(':', 2)
@@ -851,11 +844,11 @@ def handle_srs_review(call):
         result = update_json_file_on_drive(vault_files.FLASHCARDS, mutate, default_factory=list)
 
         if result is None:
-            bot.answer_callback_query(call.id, "Карточка не найдена.", show_alert=True)
+            bot.answer_callback_query(call.id, "Card not found.", show_alert=True)
             return
 
         interval_days = updated_card["value"].get("interval_days", 0) if updated_card["value"] else 0
-        next_label = "меньше часа" if rating == "again" else f"через {interval_days} дн."
+        next_label = "less than an hour" if rating == "again" else f"in {interval_days}d"
 
         # Offer a fresh AI explanation when the card wasn't remembered -
         # a small step towards an "AI tutor" rather than just re-showing
@@ -863,12 +856,12 @@ def handle_srs_review(call):
         explain_keyboard = None
         if rating == "again":
             explain_keyboard = telebot.types.InlineKeyboardMarkup()
-            explain_keyboard.add(telebot.types.InlineKeyboardButton("🎓 Объяснить по-другому", callback_data=f"explain:{card_id}"))
+            explain_keyboard.add(telebot.types.InlineKeyboardButton("🎓 Explain differently", callback_data=f"explain:{card_id}"))
 
         bot.edit_message_text(
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
-            text=f"{srs.RATING_LABELS.get(rating, '✅')} · следующее повторение {next_label}",
+            text=f"{srs.RATING_LABELS.get(rating, '✅')} · next review {next_label}",
             reply_markup=explain_keyboard
         )
         bot.answer_callback_query(call.id)
@@ -879,7 +872,7 @@ def handle_srs_review(call):
         _send_next_due_flashcard(call.message.chat.id)
     except Exception as e:
         logger.error(f"[Quiz Callback] Error handling SRS: {e}")
-        bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
+        bot.answer_callback_query(call.id, f"Error: {e}", show_alert=True)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('explain:'))
@@ -891,7 +884,7 @@ def handle_explain_card(call):
     of just showing the identical answer again next time.
     """
     if call.from_user.id != config.MY_TELEGRAM_ID:
-        bot.answer_callback_query(call.id, "Ошибка: Доступ запрещен.", show_alert=True)
+        bot.answer_callback_query(call.id, "Error: Access denied.", show_alert=True)
         return
     try:
         card_id = call.data.split(':', 1)[1]
@@ -900,69 +893,26 @@ def handle_explain_card(call):
             flashcards = []
         card = next((c for c in flashcards if c.get("id") == card_id), None)
         if not card:
-            bot.answer_callback_query(call.id, "Карточка не найдена.", show_alert=True)
+            bot.answer_callback_query(call.id, "Card not found.", show_alert=True)
             return
 
-        bot.answer_callback_query(call.id, "Объясняю...")
+        bot.answer_callback_query(call.id, "Explaining...")
         bot.send_chat_action(call.message.chat.id, 'typing')
 
-        prompt = apply_format_rule(f"""Ты — терпеливый репетитор. Пользователь не смог вспомнить ответ на учебную карточку. Объясни концепцию ЗАНОВО, другим способом (не повторяй дословно старый ответ): используй аналогию, мнемонику или более простую формулировку, чтобы это лучше запомнилось. Будь кратким (3-5 предложений).
+        prompt = apply_format_rule(f"""You are a patient tutor. The user couldn't recall the answer to a study flashcard. Explain the concept AGAIN, a different way (don't repeat the old answer verbatim): use an analogy, a mnemonic, or a simpler phrasing so it sticks better. Be brief (3-5 sentences).
 
-Вопрос: {card.get('q', '')}
-Правильный ответ: {card.get('a', '')}
+Question: {card.get('q', '')}
+Correct answer: {card.get('a', '')}
 """)
         response = key_manager.generate_content(model=config.MODEL_COMPLEX, contents=prompt)
         explanation = (response.text or "").strip()
         if not explanation:
-            explanation = "Не получилось сгенерировать объяснение, попробуй ещё раз позже."
+            explanation = "Couldn't generate an explanation, please try again later."
 
         bot.send_message(call.message.chat.id, f"🎓 {explanation}")
     except Exception as e:
         logger.error(f"[Explain Card] Error: {e}")
-        bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
-
-
-@bot.message_handler(commands=['update_schedule'])
-def handle_update_schedule(message):
-    """
-    Overwrites Расписание.md with the text that follows the command (or
-    the message it's a reply to). No AI parsing involved on purpose - see
-    university_schedule.py's module docstring for the expected format and
-    why a strict, code-parseable format was chosen over freeform recognition.
-    """
-    if not is_me(message):
-        return
-    try:
-        args = message.text.split(maxsplit=1)
-        raw_text = args[1].strip() if len(args) > 1 else ""
-        if not raw_text and message.reply_to_message:
-            raw_text = message.reply_to_message.text or message.reply_to_message.caption or ""
-
-        if not raw_text:
-            bot.reply_to(
-                message,
-                "Пришли текст расписания после команды `/update_schedule` (или ответь ею на "
-                "сообщение с текстом расписания). Формат:\n\n"
-                "```\n## Нечётная\nПн: 09:00 Предмет; 10:40 Предмет2\nВт: 12:20 Предмет3\n\n"
-                "## Чётная\nПн: 09:00 Предмет4\n```",
-                parse_mode="Markdown",
-            )
-            return
-
-        university_schedule.save_schedule(raw_text)
-        sections = university_schedule.split_sections(raw_text)
-        if not sections:
-            bot.reply_to(
-                message,
-                "⚠️ Расписание сохранено, но не нашёл ни одного раздела \"## Нечётная\"/\"## Чётная\" - "
-                "проверь формат, иначе пары не будут автоматически попадать в Tasks.md."
-            )
-            return
-
-        found = ", ".join("нечётная" if p == "odd" else "чётная" for p in sections)
-        bot.reply_to(message, f"📅 Расписание обновлено. Найдены разделы: {found}.")
-    except Exception as e:
-        bot.reply_to(message, f"Ошибка обновления расписания: {e}")
+        bot.answer_callback_query(call.id, f"Error: {e}", show_alert=True)
 
 
 @bot.message_handler(commands=['journal'])
@@ -980,7 +930,7 @@ def handle_journal_command(message):
             journal_text = message.reply_to_message.text or message.reply_to_message.caption or ""
 
         if not journal_text:
-            bot.reply_to(message, "Пожалуйста, напиши свои мысли после команды `/journal` или ответь этой командой на сообщение. Например:\n`/journal Сегодня был прекрасный продуктивный день.`")
+            bot.reply_to(message, "Please write your thoughts after the `/journal` command, or reply to a message with this command. Example:\n`/journal Today was a great, productive day.`")
             return
 
         # Save the entry itself right away, independent of the AI call below -
@@ -989,23 +939,23 @@ def handle_journal_command(message):
         # the API key pool is temporarily exhausted.
         append_journal_entry(journal_text)
 
-        status = StatusMessage(message, "📔 Читаю запись...")
+        status = StatusMessage(message, "📔 Reading your entry...")
         now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
 
-        prompt = apply_format_rule(f"""Текущее время в Москве: {now_msk}
-Сегодняшняя дата: {today_str}
+        prompt = apply_format_rule(f"""Current time in Moscow: {now_msk}
+Today's date: {today_str}
 
-Пользователь пишет личную рефлексию/дневник (journaling):
+The user is writing a personal reflection/journal entry:
 "{journal_text}"
 
 Act as an empathetic listener and coach. Respond with a short, supportive reply.
 
-Начни свой живой поддерживающий ответ с [ОТВЕТ].
+Start your warm, supportive reply with [REPLY].
 
-Формат ответа:
-[ОТВЕТ]
-Твой ответ пользователю коуча на русском языке
+Reply format:
+[REPLY]
+Your coach's reply to the user, in English
 """)
         response = key_manager.generate_content(
             model=config.MODEL_COMPLEX,
@@ -1022,7 +972,7 @@ Act as an empathetic listener and coach. Respond with a short, supportive reply.
 
         status.finish(reply_part + _fallback_note(response))
     except Exception as e:
-        bot.reply_to(message, f"Ошибка записи дневника: {e}")
+        bot.reply_to(message, f"Error saving journal entry: {e}")
 
 
 @bot.message_handler(commands=['brain'])
@@ -1037,10 +987,10 @@ def handle_brain_search(message):
         # Extract query text
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            bot.reply_to(message, "Задай вопрос своему Второму Мозгу. Пример: `/brain Как продвигаются мои цели по здоровью?`", parse_mode="Markdown")
+            bot.reply_to(message, "Ask your Second Brain a question. Example: `/brain How are my health goals coming along?`", parse_mode="Markdown")
             return
         query = args[1].strip()
-        status = StatusMessage(message, "🧠 Читаю Второй Мозг...")
+        status = StatusMessage(message, "🧠 Reading your Second Brain...")
 
         # Read context files
         tasks = read_file_from_drive(vault_files.TASKS)
@@ -1057,10 +1007,10 @@ def handle_brain_search(message):
         # can answer "who/what do I have" questions and point to /search
         # for full details on a specific one.
         index_data = vault_index.read_index()
-        people_list = ", ".join(p.get("name", "?") for p in index_data.get("people", [])) or "нет"
-        projects_list = ", ".join(p.get("name", "?") for p in index_data.get("projects", [])) or "нет"
-        media_list = ", ".join(m.get("title", "?") for m in index_data.get("media", [])) or "нет"
-        tags_list = ", ".join(index_data.get("tags", [])) or "нет"
+        people_list = ", ".join(p.get("name", "?") for p in index_data.get("people", [])) or "none"
+        projects_list = ", ".join(p.get("name", "?") for p in index_data.get("projects", [])) or "none"
+        media_list = ", ".join(m.get("title", "?") for m in index_data.get("media", [])) or "none"
+        tags_list = ", ".join(index_data.get("tags", [])) or "none"
 
         # Combine into context, safely truncating each to prevent context limit issues (e.g. max 4000 chars each)
         def truncate_context(text, max_chars=4000):
@@ -1068,44 +1018,44 @@ def handle_brain_search(message):
                 return text[-max_chars:]  # take recent part
             return text
 
-        context = f"""[ФАЙЛ Goals.md]
+        context = f"""[FILE Goals.md]
 {truncate_context(goals)}
 
-[ФАЙЛ Tasks.md]
+[FILE Tasks.md]
 {truncate_context(tasks)}
 
-[ФАЙЛ Finance.md]
+[FILE Finance.md]
 {truncate_context(finance)}
 
-[ФАЙЛ Health.md]
+[FILE Health.md]
 {truncate_context(health)}
 
-[ФАЙЛ Memory.md]
+[FILE Memory.md]
 {truncate_context(memory)}
 
-[ФАЙЛ Journal.md - личный дневник/рефлексия]
+[FILE Journal.md - personal diary/reflection]
 {truncate_context(journal)}
 
-[ИНДЕКС ВТОРОГО МОЗГА - только имена/названия, не полное содержимое заметок]
-Люди: {people_list}
-Проекты: {projects_list}
-Медиа (фильмы/аниме/книги/игры): {media_list}
-Теги: {tags_list}
+[SECOND BRAIN INDEX - names/titles only, not the full note contents]
+People: {people_list}
+Projects: {projects_list}
+Media (movies/anime/books/games): {media_list}
+Tags: {tags_list}
 """
 
-        prompt = apply_format_rule(f"""Ты — ИИ-система "Второй Мозг" пользователя Павла. Твоя задача — проанализировать все файлы его личной базы знаний (Obsidian) и дать развернутый, глубокий и точный ответ на его вопрос.
-Текущее время: {datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")}
+        prompt = apply_format_rule(f"""You are S1get's "Second Brain" AI system. Your job is to analyze all the files in their personal knowledge base (Obsidian) and give a thorough, deep, and accurate answer to their question.
+Current time: {datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")}
 
-Вопрос пользователя: "{query}"
+User's question: "{query}"
 
-Раздел [ИНДЕКС ВТОРОГО МОЗГА] содержит только список имён/названий (люди, проекты, медиа, теги), БЕЗ полного текста их заметок - если вопрос требует деталей по конкретному человеку/проекту/тайтлу, а не просто списка, честно скажи, что для подробностей нужно спросить `/search <имя>`.
+The [SECOND BRAIN INDEX] section contains only a list of names/titles (people, projects, media, tags), WITHOUT the full text of their notes - if the question needs details on a specific person/project/title rather than just a list, be upfront that they should ask `/search <name>` for details.
 
-Контекст его базы знаний (файлы из Google Drive):
+Context from their knowledge base (files from Google Drive):
 ---
 {context}
 ---
 
-Write a comprehensive, deep, and structured analysis or answer in Russian language. Focus on accuracy and facts. Use formatting to make it readable.
+Write a comprehensive, deep, and structured analysis or answer in English. Focus on accuracy and facts. Use formatting to make it readable.
 """)
         response = key_manager.generate_content(
             model=config.MODEL_COMPLEX,
@@ -1118,7 +1068,7 @@ Write a comprehensive, deep, and structured analysis or answer in Russian langua
 
         status.finish(sanitize_telegram_text(raw_text) + _fallback_note(response))
     except Exception as e:
-        bot.reply_to(message, f"Ошибка поиска по Второму Мозгу: {e}")
+        bot.reply_to(message, f"Error searching your Second Brain: {e}")
 
 
 @bot.message_handler(commands=['search'])
@@ -1129,16 +1079,16 @@ def handle_global_search(message):
     try:
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            bot.reply_to(message, "Используй `/search запрос`.", parse_mode="Markdown")
+            bot.reply_to(message, "Use `/search query`.", parse_mode="Markdown")
             return
         query = args[1].strip()
 
         files = list_markdown_files(limit=10)
         if not files:
-            bot.reply_to(message, "Не удалось найти Markdown-файлы в Google Drive.")
+            bot.reply_to(message, "Couldn't find any Markdown files in Google Drive.")
             return
 
-        status = StatusMessage(message, "🔍 Ищу по заметкам...")
+        status = StatusMessage(message, "🔍 Searching your notes...")
         collected_chunks = []
         total_chars = 0
         for file_meta in files:
@@ -1156,13 +1106,13 @@ def handle_global_search(message):
             total_chars += len(snippet)
 
         if not collected_chunks:
-            status.finish("Файлы найдены, но их содержимое пустое.")
+            status.finish("Files were found, but their content is empty.")
             return
 
         notes_context = "\n\n".join(collected_chunks)
         prompt = apply_format_rule(f"""You are the user's digital Second Brain. Answer the query: "{query}" using the provided Obsidian notes. Cite which file (.md) the information comes from.
 
-If the answer is uncertain, say so clearly. Reply in Russian and keep the answer structured and concise.
+If the answer is uncertain, say so clearly. Reply in English and keep the answer structured and concise.
 
 Notes:
 ---
@@ -1179,7 +1129,7 @@ Notes:
             return
         status.finish(sanitize_telegram_text(raw_text) + _fallback_note(response))
     except Exception as e:
-        bot.reply_to(message, f"Ошибка глобального поиска: {e}")
+        bot.reply_to(message, f"Error during global search: {e}")
 
 
 _WHO_CATEGORY_META = {
@@ -1202,7 +1152,7 @@ def handle_who(message):
     try:
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            bot.reply_to(message, "Укажи имя/название. Пример: `/who Иван`", parse_mode="Markdown")
+            bot.reply_to(message, "Give me a name/title. Example: `/who Ivan`", parse_mode="Markdown")
             return
         query = args[1].strip()
 
@@ -1217,7 +1167,7 @@ def handle_who(message):
         if not entry:
             bot.reply_to(
                 message,
-                f"Не нашёл «{query}» среди людей/медиа/проектов. Попробуй /search для поиска по всем заметкам."
+                f"Couldn't find \"{query}\" among people/media/projects. Try /search to search all your notes."
             )
             return
 
@@ -1233,11 +1183,11 @@ def handle_who(message):
         if info_bits:
             lines.append(" | ".join(info_bits))
         lines.append("")
-        lines.append(body or "(заметка пока пустая)")
+        lines.append(body or "(note is still empty)")
 
         bot.reply_to(message, "\n".join(lines))
     except Exception as e:
-        bot.reply_to(message, f"Ошибка поиска карточки: {e}")
+        bot.reply_to(message, f"Error looking up card: {e}")
 
 
 @bot.message_handler(commands=['digest'])
@@ -1248,16 +1198,16 @@ def handle_digest(message):
     try:
         raw_inbox = read_file_from_drive(vault_files.RAW_INBOX)
         if not raw_inbox.strip():
-            bot.reply_to(message, "Raw_Inbox пуст.")
+            bot.reply_to(message, "Raw_Inbox is empty.")
             return
 
         now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
-        prompt = apply_format_rule(f"""Текущее время в Москве: {now_msk}
+        prompt = apply_format_rule(f"""Current time in Moscow: {now_msk}
 
-Ниже сырые входящие сообщения из Raw_Inbox.md. Extract tasks into [TASK_ADD] and questions into [QUESTION]. Ignore casual chat.
+Below are raw incoming messages from Raw_Inbox.md. Extract tasks into [TASK_ADD] and questions into [QUESTION]. Ignore casual chat.
 
-Если времени у задачи нет, но есть день/дата, выбери разумное время. Если информации недостаточно, не создавай тег.
-Выводи только теги, по одному на строку.
+If a task has no time but has a day/date, pick a sensible time. If there isn't enough information, don't create a tag.
+Output only tags, one per line.
 
 Raw_Inbox.md:
 ---
@@ -1282,9 +1232,9 @@ Raw_Inbox.md:
             return ""
 
         update_file_on_drive(vault_files.RAW_INBOX, clear_if_unchanged)
-        bot.reply_to(message, f"📥 Inbox разобран. Извлечено тегов: {len(tags)}")
+        bot.reply_to(message, f"📥 Inbox processed. Tags extracted: {len(tags)}")
     except Exception as e:
-        bot.reply_to(message, f"Ошибка digest: {e}")
+        bot.reply_to(message, f"Digest error: {e}")
 
 
 @bot.message_handler(commands=['process'])
@@ -1295,27 +1245,27 @@ def handle_process_inbox(message):
     try:
         inbox_content = read_file_from_drive(vault_files.INBOX)
         if not inbox_content.strip():
-            bot.reply_to(message, "Inbox пуст.")
+            bot.reply_to(message, "Inbox is empty.")
             return
 
         now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
-        prompt = apply_format_rule(f"""Текущее время в Москве: {now_msk}
+        prompt = apply_format_rule(f"""Current time in Moscow: {now_msk}
 
-Ниже содержимое Inbox.md с сырыми заметками пользователя.
-Преобразуй материал только в теги:
+Below is the content of Inbox.md with the user's raw notes.
+Convert the material into tags only:
 - [NOTE] Category | Text
 - [CARD] Question | Answer
 
-Для [NOTE]:
-- делай атомарные заметки;
-- автоматически оборачивай ключевые сущности, концепты и имена в [[wikilinks]];
-- добавляй релевантные #tags;
-- выбирай краткую и понятную Category.
+For [NOTE]:
+- make atomic notes;
+- automatically wrap key entities, concepts, and names in [[wikilinks]];
+- add relevant #tags;
+- pick a short, clear Category.
 
-Для [CARD]:
-- создавай только полезные карточки формата вопрос-ответ.
+For [CARD]:
+- only create genuinely useful question-answer cards.
 
-Игнорируй шум и повторы. Выводи только теги, по одному на строку.
+Ignore noise and repeats. Output only tags, one per line.
 
 Inbox.md:
 ---
@@ -1337,9 +1287,9 @@ Inbox.md:
             return ""
 
         update_file_on_drive(vault_files.INBOX, clear_if_unchanged)
-        bot.reply_to(message, f"🗂 Inbox обработан. Извлечено тегов: {len(tags)}")
+        bot.reply_to(message, f"🗂 Inbox processed. Tags extracted: {len(tags)}")
     except Exception as e:
-        bot.reply_to(message, f"Ошибка process: {e}")
+        bot.reply_to(message, f"Process error: {e}")
 
 
 @bot.message_handler(func=lambda message: True)
@@ -1357,11 +1307,11 @@ def chat_with_gemini(message):
     try:
         current_memory = read_file_from_drive(vault_files.MEMORY)
         if not current_memory.strip():
-            current_memory = "Пока пустая долгосрочная память."
+            current_memory = "Long-term memory is still empty."
 
         current_tasks = read_file_from_drive(vault_files.TASKS)
         if not current_tasks.strip():
-            current_tasks = "Пока нет задач."
+            current_tasks = "No tasks yet."
 
         now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
@@ -1375,13 +1325,13 @@ def chat_with_gemini(message):
             user_message_text = message.text
 
         # Multi-Agent Pipeline: Router
-        status.update("🔎 Анализирую сообщение...")
+        status.update("🔎 Analyzing message...")
         classification = agent_router(user_message_text)
         logger.info(f"[Multi-Agent Pipeline] Router classified as: {classification}")
 
         # If NOTE, use Archivist agent
         if classification == "NOTE":
-            status.update("📝 Пишу заметку в базу знаний...")
+            status.update("📝 Writing a note to your knowledge base...")
             note_output = agent_archivist(user_message_text)
             if note_output and "[NOTE]" in note_output:
                 # Parse and save the note. apply_gemini_tags() itself
@@ -1390,9 +1340,9 @@ def chat_with_gemini(message):
                 tags = parse_gemini_tags(note_output)
                 apply_gemini_tags(tags)
 
-                reply_part = f"📝 Заметка сохранена: {note_output.replace('[NOTE]', '').strip()}"
+                reply_part = f"📝 Note saved: {note_output.replace('[NOTE]', '').strip()}"
                 if not reply_part or not reply_part.strip():
-                    reply_part = "Успешно записал новые знания в твой мозг! 🧠"
+                    reply_part = "Successfully saved new knowledge to your brain! 🧠"
                 status.finish(reply_part)
                 return
 
@@ -1404,42 +1354,42 @@ def chat_with_gemini(message):
             selected_model = config.MODEL_LITE
 
         logger.info(f"[Model Router] Routing input (length={text_len}, forwarded={is_forwarded}) to model: {selected_model}")
-        status.update("💬 Готовлю ответ...")
+        status.update("💬 Preparing a reply...")
         extraction_rules = get_extraction_rules(today_str)
 
-        prompt = apply_format_rule(f"""Текущее время в Москве: {now_msk}
-Сегодняшняя дата: {today_str}
+        prompt = apply_format_rule(f"""Current time in Moscow: {now_msk}
+Today's date: {today_str}
 
-Долгосрочная память (Memory.md):
+Long-term memory (Memory.md):
 ---
 {current_memory}
 ---
 
-Задачи пользователя (Tasks.md):
+User's tasks (Tasks.md):
 ---
 {current_tasks}
 ---
 
-S1get пишет: "{user_message_text}"
+S1get says: "{user_message_text}"
 
 You have access to the user's tasks (Tasks.md). If the user asks about their schedule, plans, or what they have to do today/tomorrow/this week, analyze the Tasks.md list and give them a precise answer.
 
-Ответь чётко и по делу. В [ОТВЕТ] — только живой ответ пользователю, без дублирования памяти.
+Reply clearly and to the point. In [REPLY] — only the live reply to the user, without repeating memory content.
 
 {extraction_rules}
 
-ПРАВИЛО ДЛЯ ПЕРЕСЛАННЫХ СООБЩЕНИЙ [QUESTION]:
-Если пересланное сообщение содержит вопрос или требует ответа, обязательно добавь тег:
-[QUESTION] Name: суть вопроса
-Где Name — это имя оригинального отправителя (из "Pavel forwarded a message from Name:"), а "суть вопроса" — краткое описание вопроса.
+RULE FOR FORWARDED MESSAGES [QUESTION]:
+If a forwarded message contains a question or needs a reply, be sure to add the tag:
+[QUESTION] Name: gist of the question
+Where Name is the original sender's name (from "Pavel forwarded a message from Name:"), and "gist of the question" is a brief description of the question.
 
-Примеры распознавания:
+Recognition examples:
 - "Pavel forwarded a message from Ivan:\nWill you come to the meeting?" → [QUESTION] Ivan: Will you come to the meeting?
 
-Формат ответа:
-[ОТВЕТ]
-Твой ответ пользователю
-(далее теги, если нужны — каждый с новой строки)
+Reply format:
+[REPLY]
+Your reply to the user
+(then tags, if needed — each on a new line)
 """)
         response = key_manager.generate_content(
             model=selected_model,
@@ -1456,10 +1406,10 @@ You have access to the user's tasks (Tasks.md). If the user asks about their sch
 
         # Prevent empty reply to avoid Telegram 400 errors
         if not reply_part or not reply_part.strip():
-            reply_part = "Успешно записал новые знания в твой мозг! 🧠"
+            reply_part = "Successfully saved new knowledge to your brain! 🧠"
         status.finish(reply_part + _fallback_note(response))
     except Exception as e:
-        status.finish(f"Ошибка: {e}")
+        status.finish(f"Error: {e}")
 
 
 def process_external_text(text):
@@ -1469,30 +1419,30 @@ def process_external_text(text):
     try:
         current_memory = read_file_from_drive(vault_files.MEMORY)
         if not current_memory.strip():
-            current_memory = "Пока пустая долгосрочная память."
+            current_memory = "Long-term memory is still empty."
 
         now_msk = datetime.now(config.msk_tz).strftime("%Y-%m-%d %H:%M")
         today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
         extraction_rules = get_extraction_rules(today_str)
 
-        prompt = apply_format_rule(f"""Текущее время в Москве: {now_msk}
-Сегодняшняя дата: {today_str}
+        prompt = apply_format_rule(f"""Current time in Moscow: {now_msk}
+Today's date: {today_str}
 
-Долгосрочная память (Memory.md):
+Long-term memory (Memory.md):
 ---
 {current_memory}
 ---
 
-S1get пишет (через Siri/Shortcut): "{text}"
+S1get says (via Siri/Shortcut): "{text}"
 
-Ответь чётко и по делу. В [ОТВЕТ] — только живой ответ пользователю, без дублирования памяти.
+Reply clearly and to the point. In [REPLY] — only the live reply to the user, without repeating memory content.
 
 {extraction_rules}
 
-Формат ответа:
-[ОТВЕТ]
-Твой ответ пользователю
-(далее теги, если нужны — каждый с новой строки)
+Reply format:
+[REPLY]
+Your reply to the user
+(then tags, if needed — each on a new line)
 """)
         response = key_manager.generate_content(
             model=config.MODEL_LITE,

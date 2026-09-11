@@ -29,29 +29,18 @@ from drive_service import (
     get_health_dashboard_series,
     HEALTH_PERIOD_DAYS,
     get_habit_completion_array,
-    get_user_profile,
     get_monthly_expenses,
     get_expenses_by_category,
-    add_user_xp,
     initialize_folder_mapping,
 )
 
 logger = get_logger(__name__)
 
 
-def _ru_days_label(n):
-    """Correct Russian pluralization for 'день'/'дня'/'дней' - the naive
-    n < 5 check breaks on 11-14 (which take 'дней', not 'дня', despite
-    ending in 1-4)."""
-    if 11 <= n % 100 <= 14:
-        word = "дней"
-    elif n % 10 == 1:
-        word = "день"
-    elif 2 <= n % 10 <= 4:
-        word = "дня"
-    else:
-        word = "дней"
-    return f"{n} {word} подряд"
+def _days_streak_label(n):
+    """English has none of Russian's день/дня/дней pluralization
+    complexity - just singular "day" for 1, "days" otherwise."""
+    return f"{n} day{'s' if n != 1 else ''} in a row"
 
 # Initialize Flask Mini App
 app = Flask(__name__)
@@ -176,17 +165,12 @@ def mark_task_done():
 
         # update_file_on_drive serializes this read-modify-write against any
         # other concurrent writer of Tasks.md (e.g. a Telegram message being
-        # processed at the same time), preventing a lost update. Its return
-        # value is None both when the task wasn't found and when the Drive
-        # write itself failed after mutate() ran, so either way we must not
-        # award XP for a change that wasn't actually persisted.
+        # processed at the same time), preventing a lost update.
         result = update_file_on_drive(vault_files.TASKS, mutate)
 
         if result is None:
             return jsonify({"success": False, "error": "Task not found"}), 404
 
-        # RPG Gamification: Add +10 XP for task completion
-        add_user_xp(10)
         return jsonify({"success": True})
     except Exception as e:
         logger.error(f"[Dashboard] mark_task_done error: {e}")
@@ -222,7 +206,7 @@ def get_focus_task():
         open_tasks = [t for t in today_tasks if not t.get("done")]
 
         if not open_tasks:
-            return jsonify({"success": True, "task": "Нет открытых задач на сегодня! Отдыхайте 🎉"})
+            return jsonify({"success": True, "task": "No open tasks for today! Relax 🎉"})
 
         tasks_text = "\n".join([f"- {t.get('time', '—')} | {t.get('text')}" for t in open_tasks])
 
@@ -281,8 +265,7 @@ def home():
     sleep_labels = ["No data"]
     last_sleep = "—"
     habit_data = []
-    profile = {"xp": 0, "level": 1}
-    welcome_msg = "Привет, Павел! Рад тебя видеть в Time OS 2.0."
+    welcome_msg = "Hey, Pavel! Good to see you in Time OS 2.0."
     flashcard_stats = {"total": 0, "due": 0}
     today_classes = []
     brain_stats = {"people": 0, "projects": 0, "media": 0, "tags": 0}
@@ -366,14 +349,6 @@ def home():
         habit_streak += 1
 
     try:
-        profile = get_user_profile()
-        if not profile or not isinstance(profile, dict):
-            profile = {"xp": 0, "level": 1}
-    except Exception as e:
-        logger.error(f"[Dashboard] Error getting user profile: {e}")
-        profile = {"xp": 0, "level": 1}
-
-    try:
         flashcards = read_json_from_drive(vault_files.FLASHCARDS)
         if isinstance(flashcards, list):
             flashcard_stats["total"] = len(flashcards)
@@ -425,7 +400,7 @@ def home():
         from key_manager import key_manager
         current_memory = read_file_from_drive(vault_files.MEMORY)
         if current_memory:
-            prompt = f"Напиши одно очень короткое (до 15 слов) приветствие для Павел в Time OS 2.0 на русском языке. Можешь упомянуть важный факт из его памяти: {current_memory[:500]}"
+            prompt = f"Write one very short (under 15 words) greeting for Pavel in Time OS 2.0, in English. You can mention an important fact from his memory: {current_memory[:500]}"
             response = key_manager.generate_content(
                 model=config.MODEL_LITE,
                 contents=prompt
@@ -460,14 +435,13 @@ def home():
         last_calories=last_calories,
         habit_data=habit_data,
         welcome_msg=welcome_msg,
-        profile=profile,
         flashcard_stats=flashcard_stats,
         today_classes=today_classes,
         brain_stats=brain_stats,
         finance_total=finance_total,
         finance_recent=finance_recent,
         finance_by_category=finance_by_category,
-        habit_streak_label=_ru_days_label(habit_streak) if habit_streak > 0 else "",
+        habit_streak_label=_days_streak_label(habit_streak) if habit_streak > 0 else "",
     )
 
 

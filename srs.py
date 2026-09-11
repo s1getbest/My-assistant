@@ -39,10 +39,10 @@ RATINGS = ("again", "hard", "good", "easy")
 # Labels/emoji for the 4 review buttons, in a consistent order across
 # Telegram and the dashboard.
 RATING_LABELS = {
-    "again": "😵 Забыл",
-    "hard": "😐 Трудно",
-    "good": "🙂 Хорошо",
-    "easy": "😎 Легко",
+    "again": "😵 Again",
+    "hard": "😐 Hard",
+    "good": "🙂 Good",
+    "easy": "😎 Easy",
 }
 
 

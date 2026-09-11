@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -28,18 +28,7 @@
                 <h1 class="text-sm font-bold tracking-wide">Time OS</h1>
                 <p class="text-[10px] text-indigo-400">{{ today_label }}</p>
             </div>
-            <!-- RPG Level & Progress Bar -->
-            <div class="flex items-center gap-3">
-                <div class="text-right">
-                    <span class="text-[9px] font-bold text-indigo-400 uppercase tracking-wider bg-indigo-500/10 px-1.5 py-0.5 rounded-full">Lvl {{ profile.level }}</span>
-                    <!-- XP progress mini bar -->
-                    <div class="w-16 h-1 bg-slate-800 rounded-full mt-1 overflow-hidden">
-                        <div class="bg-indigo-500 h-full rounded-full" style="width: {{ profile.xp % 100 }}%"></div>
-                    </div>
-                    <span class="text-[8px] text-slate-500 block mt-0.5">{{ profile.xp % 100 }}/100 XP</span>
-                </div>
-                <div class="w-9 h-9 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold shadow-lg shadow-indigo-500/30">ПВ</div>
-            </div>
+            <div class="w-9 h-9 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold shadow-lg shadow-indigo-500/30">PV</div>
         </div>
     </header>
 
@@ -51,30 +40,30 @@
             <div class="bg-gradient-to-br from-indigo-950/40 to-slate-900 rounded-2xl border border-indigo-500/20 p-5 mb-4">
                 <div class="flex items-center gap-3 mb-2">
                     <span class="text-2xl">🧠</span>
-                    <p class="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">Ваш ИИ-Ассистент</p>
+                    <p class="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">Your AI Assistant</p>
                 </div>
                 <p class="text-sm italic leading-relaxed text-indigo-200">"{{ welcome_msg }}"</p>
             </div>
 
             <!-- Second Brain Stats Card -->
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🧠 Второй Мозг</h2>
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🧠 Second Brain</h2>
                 <div class="grid grid-cols-4 gap-2">
                     <div class="bg-slate-950/50 rounded-xl p-3 border border-slate-800 text-center">
                         <p class="text-xl font-extrabold text-indigo-400">{{ brain_stats.people }}</p>
-                        <p class="text-[9px] text-slate-500 uppercase tracking-wide mt-0.5">👥 Люди</p>
+                        <p class="text-[9px] text-slate-500 uppercase tracking-wide mt-0.5">👥 People</p>
                     </div>
                     <div class="bg-slate-950/50 rounded-xl p-3 border border-slate-800 text-center">
                         <p class="text-xl font-extrabold text-purple-400">{{ brain_stats.media }}</p>
-                        <p class="text-[9px] text-slate-500 uppercase tracking-wide mt-0.5">🎬 Медиа</p>
+                        <p class="text-[9px] text-slate-500 uppercase tracking-wide mt-0.5">🎬 Media</p>
                     </div>
                     <div class="bg-slate-950/50 rounded-xl p-3 border border-slate-800 text-center">
                         <p class="text-xl font-extrabold text-amber-400">{{ brain_stats.projects }}</p>
-                        <p class="text-[9px] text-slate-500 uppercase tracking-wide mt-0.5">📁 Проекты</p>
+                        <p class="text-[9px] text-slate-500 uppercase tracking-wide mt-0.5">📁 Projects</p>
                     </div>
                     <div class="bg-slate-950/50 rounded-xl p-3 border border-slate-800 text-center">
                         <p class="text-xl font-extrabold text-emerald-400">{{ brain_stats.tags }}</p>
-                        <p class="text-[9px] text-slate-500 uppercase tracking-wide mt-0.5">🏷 Теги</p>
+                        <p class="text-[9px] text-slate-500 uppercase tracking-wide mt-0.5">🏷 Tags</p>
                     </div>
                 </div>
             </div>
@@ -82,17 +71,17 @@
             <!-- Habit Heatmap Card -->
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
                 <div class="flex items-center justify-between mb-3">
-                    <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider">🔥 Календарь привычек</h2>
+                    <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider">🔥 Habit Calendar</h2>
                     {% if habit_streak_label %}
                     <span class="text-[10px] font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full">{{ habit_streak_label }}</span>
                     {% endif %}
                 </div>
-                <p class="text-[11px] text-slate-500 mb-4">Зеленым отмечены дни, когда вы выполнили более 50% рутинных задач.</p>
+                <p class="text-[11px] text-slate-500 mb-4">Days marked green are ones where you completed more than 50% of your routine tasks.</p>
                 <div class="grid grid-cols-7 gap-2">
                     {% for day in habit_data %}
                     <div class="flex flex-col items-center">
                         <span class="text-[9px] text-slate-500 mb-1">{{ day.label }}</span>
-                        <div class="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold {{ 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20' if day.completed else 'bg-slate-800 text-slate-400 border border-slate-700' }}" title="{{ day.date }}: {{ day.done }}/{{ day.total }} привычек выполнено">
+                        <div class="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold {{ 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20' if day.completed else 'bg-slate-800 text-slate-400 border border-slate-700' }}" title="{{ day.date }}: {{ day.done }}/{{ day.total }} habits completed">
                             {% if day.completed %}✓{% else %}•{% endif %}
                         </div>
                     </div>
@@ -110,13 +99,13 @@
                 </button>
                 <!-- Focus Now Result card -->
                 <div id="focus-result" class="hidden bg-slate-900 border border-indigo-500/30 rounded-xl p-4 transition-all">
-                    <p class="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1">🎯 Рекомендация "Второго Мозга"</p>
+                    <p class="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1">🎯 "Second Brain" recommendation</p>
                     <p id="focus-text" class="text-sm text-indigo-200 italic leading-relaxed"></p>
                 </div>
             </div>
 
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">📋 Сегодня</h2>
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">📋 Today</h2>
                 {% if today_tasks %}
                 <div class="relative pl-6 space-y-4">
                     <div class="absolute left-[7px] top-2 bottom-2 w-0.5 timeline-line rounded-full opacity-60"></div>
@@ -146,7 +135,7 @@
                     {% endfor %}
                 </div>
                 {% else %}
-                <p class="text-sm text-slate-500 text-center py-8">Нет задач на сегодня 🎉</p>
+                <p class="text-sm text-slate-500 text-center py-8">No tasks for today 🎉</p>
                 {% endif %}
             </div>
         </div>
@@ -155,25 +144,25 @@
         <div id="tab-health" class="tab-panel hidden">
             <!-- Period toggle - shared by every chart below, see setHealthPeriod() -->
             <div class="flex gap-1.5 mb-4 overflow-x-auto pb-1">
-                <button onclick="setHealthPeriod('week')" data-period="week" class="health-period-btn shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-indigo-500 text-white">Неделя</button>
-                <button onclick="setHealthPeriod('month')" data-period="month" class="health-period-btn shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-slate-900 text-slate-400 border border-slate-800">Месяц</button>
-                <button onclick="setHealthPeriod('year')" data-period="year" class="health-period-btn shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-slate-900 text-slate-400 border border-slate-800">Год</button>
-                <button onclick="setHealthPeriod('5y')" data-period="5y" class="health-period-btn shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-slate-900 text-slate-400 border border-slate-800">5 лет</button>
-                <button onclick="setHealthPeriod('10y')" data-period="10y" class="health-period-btn shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-slate-900 text-slate-400 border border-slate-800">10 лет</button>
+                <button onclick="setHealthPeriod('week')" data-period="week" class="health-period-btn shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-indigo-500 text-white">Week</button>
+                <button onclick="setHealthPeriod('month')" data-period="month" class="health-period-btn shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-slate-900 text-slate-400 border border-slate-800">Month</button>
+                <button onclick="setHealthPeriod('year')" data-period="year" class="health-period-btn shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-slate-900 text-slate-400 border border-slate-800">Year</button>
+                <button onclick="setHealthPeriod('5y')" data-period="5y" class="health-period-btn shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-slate-900 text-slate-400 border border-slate-800">5 Years</button>
+                <button onclick="setHealthPeriod('10y')" data-period="10y" class="health-period-btn shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-slate-900 text-slate-400 border border-slate-800">10 Years</button>
             </div>
 
             <div class="grid grid-cols-2 gap-3 mb-4">
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Последний сон</p>
-                    <p class="text-2xl font-extrabold text-indigo-400 mt-1">{{ last_sleep }} <span class="text-sm">ч</span></p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Last Sleep</p>
+                    <p class="text-2xl font-extrabold text-indigo-400 mt-1">{{ last_sleep }} <span class="text-sm">h</span></p>
                 </div>
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (<span class="health-period-label">7д</span>)</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Average (<span class="health-period-label">7d</span>)</p>
                     <p class="text-2xl font-extrabold text-indigo-300 mt-1" id="avgSleep">—</p>
                 </div>
             </div>
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🌙 Тренд сна</h2>
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🌙 Sleep Trend</h2>
                 <div class="h-44">
                     <canvas id="sleepChart"></canvas>
                 </div>
@@ -181,17 +170,17 @@
 
             <div class="grid grid-cols-2 gap-3 mb-4">
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Шаги</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Steps</p>
                     <p class="text-2xl font-extrabold text-emerald-400 mt-1">{{ last_steps }}</p>
                 </div>
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (<span class="health-period-label">7д</span>)</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Average (<span class="health-period-label">7d</span>)</p>
                     <p class="text-2xl font-extrabold text-emerald-300 mt-1" id="avgSteps">—</p>
                 </div>
             </div>
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🚶 Тренд шагов</h2>
-                <p class="text-[11px] text-slate-500 mb-3">Из /steps или обычного сообщения ("прошёл 9000 шагов").</p>
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🚶 Steps Trend</h2>
+                <p class="text-[11px] text-slate-500 mb-3">From /steps or a plain message ("walked 9000 steps").</p>
                 <div class="h-44">
                     <canvas id="stepsChart"></canvas>
                 </div>
@@ -199,17 +188,17 @@
 
             <div class="grid grid-cols-2 gap-3 mb-4">
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Пульс</p>
-                    <p class="text-2xl font-extrabold text-rose-400 mt-1">{{ last_hr }} <span class="text-sm">уд/мин</span></p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Heart Rate</p>
+                    <p class="text-2xl font-extrabold text-rose-400 mt-1">{{ last_hr }} <span class="text-sm">bpm</span></p>
                 </div>
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (<span class="health-period-label">7д</span>)</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Average (<span class="health-period-label">7d</span>)</p>
                     <p class="text-2xl font-extrabold text-rose-300 mt-1" id="avgHr">—</p>
                 </div>
             </div>
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">❤️ Тренд пульса</h2>
-                <p class="text-[11px] text-slate-500 mb-3">Из /pulse или обычного сообщения ("пульс в покое 58").</p>
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">❤️ Heart Rate Trend</h2>
+                <p class="text-[11px] text-slate-500 mb-3">From /pulse or a plain message ("resting heart rate 58").</p>
                 <div class="h-44">
                     <canvas id="hrChart"></canvas>
                 </div>
@@ -217,17 +206,17 @@
 
             <div class="grid grid-cols-2 gap-3 mb-4">
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Стресс</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Stress</p>
                     <p class="text-2xl font-extrabold text-amber-400 mt-1">{{ last_stress }} <span class="text-sm">/10</span></p>
                 </div>
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (<span class="health-period-label">7д</span>)</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Average (<span class="health-period-label">7d</span>)</p>
                     <p class="text-2xl font-extrabold text-amber-300 mt-1" id="avgStress">—</p>
                 </div>
             </div>
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🧘 Тренд стресса</h2>
-                <p class="text-[11px] text-slate-500 mb-3">Из /stress или обычного сообщения ("уровень стресса 6 из 10").</p>
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🧘 Stress Trend</h2>
+                <p class="text-[11px] text-slate-500 mb-3">From /stress or a plain message ("stress level 6 out of 10").</p>
                 <div class="h-44">
                     <canvas id="stressChart"></canvas>
                 </div>
@@ -235,17 +224,17 @@
 
             <div class="grid grid-cols-2 gap-3 mb-4">
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Дистанция</p>
-                    <p class="text-2xl font-extrabold text-sky-400 mt-1">{{ last_distance }} <span class="text-sm">км</span></p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Distance</p>
+                    <p class="text-2xl font-extrabold text-sky-400 mt-1">{{ last_distance }} <span class="text-sm">km</span></p>
                 </div>
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (<span class="health-period-label">7д</span>)</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Average (<span class="health-period-label">7d</span>)</p>
                     <p class="text-2xl font-extrabold text-sky-300 mt-1" id="avgDistance">—</p>
                 </div>
             </div>
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🏃 Тренд дистанции</h2>
-                <p class="text-[11px] text-slate-500 mb-3">Из /distance или обычного сообщения ("пробежал 5.4 км").</p>
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🏃 Distance Trend</h2>
+                <p class="text-[11px] text-slate-500 mb-3">From /distance or a plain message ("ran 5.4 km").</p>
                 <div class="h-44">
                     <canvas id="distanceChart"></canvas>
                 </div>
@@ -253,17 +242,17 @@
 
             <div class="grid grid-cols-2 gap-3 mb-4">
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Калории</p>
-                    <p class="text-2xl font-extrabold text-orange-400 mt-1">{{ last_calories }} <span class="text-sm">ккал</span></p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Calories</p>
+                    <p class="text-2xl font-extrabold text-orange-400 mt-1">{{ last_calories }} <span class="text-sm">kcal</span></p>
                 </div>
                 <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Среднее (<span class="health-period-label">7д</span>)</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">Average (<span class="health-period-label">7d</span>)</p>
                     <p class="text-2xl font-extrabold text-orange-300 mt-1" id="avgCalories">—</p>
                 </div>
             </div>
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🔥 Тренд калорий</h2>
-                <p class="text-[11px] text-slate-500 mb-3">Из /calories или обычного сообщения ("сжёг 2150 калорий").</p>
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🔥 Calories Trend</h2>
+                <p class="text-[11px] text-slate-500 mb-3">From /calories or a plain message ("burned 2150 calories").</p>
                 <div class="h-44">
                     <canvas id="caloriesChart"></canvas>
                 </div>
@@ -274,7 +263,7 @@
         <div id="tab-study" class="tab-panel hidden">
             <!-- Today's Classes Card -->
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">📅 Пары сегодня</h2>
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">📅 Classes Today</h2>
                 {% if today_classes %}
                 <div class="space-y-2">
                     {% for cls in today_classes %}
@@ -285,15 +274,15 @@
                     {% endfor %}
                 </div>
                 {% else %}
-                <p class="text-sm text-slate-500 text-center py-4">Сегодня пар нет 🎉 (или расписание ещё не задано — /update_schedule в боте)</p>
+                <p class="text-sm text-slate-500 text-center py-4">No classes today 🎉 (or the schedule hasn't been set yet — edit Schedule.md in Drive)</p>
                 {% endif %}
             </div>
 
             <!-- Flashcard Review Card (Anki-style SM-2, see srs.py) -->
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🎴 Повторение</h2>
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🎴 Review</h2>
 
-                <div id="study-empty" class="text-sm text-slate-500 text-center py-8">Загрузка...</div>
+                <div id="study-empty" class="text-sm text-slate-500 text-center py-8">Loading...</div>
 
                 <div id="study-card" class="hidden">
                     <div class="bg-slate-950/60 rounded-xl p-4 border border-slate-800/80 min-h-[88px] flex items-center justify-center text-center">
@@ -301,19 +290,19 @@
                     </div>
 
                     <div id="study-answer-wrap" class="hidden mt-3 bg-indigo-950/30 rounded-xl p-4 border border-indigo-500/20">
-                        <p class="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1">💡 Ответ</p>
+                        <p class="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1">💡 Answer</p>
                         <p id="study-answer" class="text-sm leading-relaxed text-indigo-100"></p>
                     </div>
 
                     <button id="show-answer-btn" onclick="showFlashcardAnswer()" class="w-full mt-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold py-2.5 rounded-xl transition-colors text-sm">
-                        Показать ответ
+                        Show Answer
                     </button>
 
                     <div id="study-actions" class="hidden grid grid-cols-4 gap-1.5 mt-3">
-                        <button onclick="reviewFlashcard('again')" class="bg-red-500/15 hover:bg-red-500/25 text-red-300 font-semibold py-2.5 rounded-xl text-[10px] leading-tight transition-colors">😵<br>Забыл</button>
-                        <button onclick="reviewFlashcard('hard')" class="bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 font-semibold py-2.5 rounded-xl text-[10px] leading-tight transition-colors">😐<br>Трудно</button>
-                        <button onclick="reviewFlashcard('good')" class="bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 font-semibold py-2.5 rounded-xl text-[10px] leading-tight transition-colors">🙂<br>Хорошо</button>
-                        <button onclick="reviewFlashcard('easy')" class="bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 font-semibold py-2.5 rounded-xl text-[10px] leading-tight transition-colors">😎<br>Легко</button>
+                        <button onclick="reviewFlashcard('again')" class="bg-red-500/15 hover:bg-red-500/25 text-red-300 font-semibold py-2.5 rounded-xl text-[10px] leading-tight transition-colors">😵<br>Again</button>
+                        <button onclick="reviewFlashcard('hard')" class="bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 font-semibold py-2.5 rounded-xl text-[10px] leading-tight transition-colors">😐<br>Hard</button>
+                        <button onclick="reviewFlashcard('good')" class="bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 font-semibold py-2.5 rounded-xl text-[10px] leading-tight transition-colors">🙂<br>Good</button>
+                        <button onclick="reviewFlashcard('easy')" class="bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 font-semibold py-2.5 rounded-xl text-[10px] leading-tight transition-colors">😎<br>Easy</button>
                     </div>
                 </div>
             </div>
@@ -325,11 +314,11 @@
                 </div>
                 <div class="grid grid-cols-2 gap-3">
                     <div class="bg-slate-950/50 rounded-xl p-4 border border-slate-800">
-                        <p class="text-[10px] font-bold text-slate-500 uppercase">Всего карточек</p>
+                        <p class="text-[10px] font-bold text-slate-500 uppercase">Total Cards</p>
                         <p class="text-3xl font-extrabold text-indigo-400 mt-1">{{ flashcard_stats.total }}</p>
                     </div>
                     <div class="bg-slate-950/50 rounded-xl p-4 border border-slate-800">
-                        <p class="text-[10px] font-bold text-slate-500 uppercase">Ожидают повторения</p>
+                        <p class="text-[10px] font-bold text-slate-500 uppercase">Due for Review</p>
                         <p class="text-3xl font-extrabold text-amber-400 mt-1">{{ flashcard_stats.due }}</p>
                     </div>
                 </div>
@@ -339,13 +328,13 @@
         <!-- TAB 4: FINANCE -->
         <div id="tab-finance" class="tab-panel hidden">
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
-                <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Траты в этом месяце</p>
+                <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Spending This Month</p>
                 <p class="text-3xl font-extrabold text-rose-400 mt-1">{{ "{:,}".format(finance_total).replace(",", " ") }} <span class="text-sm">₽</span></p>
             </div>
 
             {% if finance_by_category %}
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">📊 По категориям</h2>
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">📊 By Category</h2>
                 <div class="h-48">
                     <canvas id="financeChart"></canvas>
                 </div>
@@ -353,7 +342,7 @@
             {% endif %}
 
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
-                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🧾 Последние траты</h2>
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🧾 Recent Spending</h2>
                 {% if finance_recent %}
                 <div class="space-y-2">
                     {% for tx in finance_recent %}
@@ -367,7 +356,7 @@
                     {% endfor %}
                 </div>
                 {% else %}
-                <p class="text-sm text-slate-500 text-center py-8">Трат в этом месяце ещё нет</p>
+                <p class="text-sm text-slate-500 text-center py-8">No spending this month yet</p>
                 {% endif %}
             </div>
         </div>
@@ -457,7 +446,7 @@
                 checkbox.checked = false;
                 checkbox.disabled = false;
                 label.classList.remove('line-through', 'opacity-50');
-                showToast("Не удалось завершить задачу: " + e.message);
+                showToast("Failed to complete task: " + e.message);
             }
         }
 
@@ -484,8 +473,8 @@
             const resultText = document.getElementById('focus-text');
             
             btn.disabled = true;
-            btn.innerHTML = '<span>Выбираю... 🔮</span>';
-            
+            btn.innerHTML = '<span>Picking... 🔮</span>';
+
             try {
                 const initData = getTelegramInitData();
                 const res = await fetch('/api/now', {
@@ -498,11 +487,11 @@
                     resultText.textContent = data.task;
                     resultCard.classList.remove('hidden');
                 } else {
-                    resultText.textContent = 'Ошибка получения рекомендации: ' + (data.error || 'Failed');
+                    resultText.textContent = 'Error getting recommendation: ' + (data.error || 'Failed');
                     resultCard.classList.remove('hidden');
                 }
             } catch (e) {
-                resultText.textContent = 'Ошибка сети: ' + e.message;
+                resultText.textContent = 'Network error: ' + e.message;
                 resultCard.classList.remove('hidden');
             } finally {
                 btn.disabled = false;
@@ -547,7 +536,7 @@
             } catch (e) {
                 currentFlashcard = null;
                 cardWrap.classList.add('hidden');
-                emptyState.textContent = 'Ошибка загрузки карточки: ' + e.message;
+                emptyState.textContent = 'Error loading flashcard: ' + e.message;
                 emptyState.classList.remove('hidden');
             }
         }
@@ -582,7 +571,7 @@
                     rating: rating
                 })
             }).catch(e => {
-                showToast('Ошибка сохранения: ' + e.message);
+                showToast('Error saving: ' + e.message);
             });
 
             // Immediately load next card
@@ -595,15 +584,15 @@
         // match /api/health_series's response shape (drive_service.
         // get_health_dashboard_series).
         const HEALTH_METRICS = [
-            { key: 'sleep', canvasId: 'sleepChart', avgId: 'avgSleep', suffix: ' ч', decimals: 1, color: '#818cf8', glow: '129, 140, 248', yMax: null },
+            { key: 'sleep', canvasId: 'sleepChart', avgId: 'avgSleep', suffix: ' h', decimals: 1, color: '#818cf8', glow: '129, 140, 248', yMax: null },
             { key: 'steps', canvasId: 'stepsChart', avgId: 'avgSteps', suffix: '', decimals: 0, color: '#34d399', glow: '52, 211, 153', yMax: null },
-            { key: 'hr', canvasId: 'hrChart', avgId: 'avgHr', suffix: ' уд/мин', decimals: 0, color: '#fb7185', glow: '251, 113, 133', yMax: null },
+            { key: 'hr', canvasId: 'hrChart', avgId: 'avgHr', suffix: ' bpm', decimals: 0, color: '#fb7185', glow: '251, 113, 133', yMax: null },
             { key: 'stress', canvasId: 'stressChart', avgId: 'avgStress', suffix: ' /10', decimals: 1, color: '#fbbf24', glow: '251, 191, 36', yMax: 10 },
-            { key: 'distance', canvasId: 'distanceChart', avgId: 'avgDistance', suffix: ' км', decimals: 1, color: '#38bdf8', glow: '56, 189, 248', yMax: null },
-            { key: 'calories', canvasId: 'caloriesChart', avgId: 'avgCalories', suffix: ' ккал', decimals: 0, color: '#fb923c', glow: '251, 146, 60', yMax: null },
+            { key: 'distance', canvasId: 'distanceChart', avgId: 'avgDistance', suffix: ' km', decimals: 1, color: '#38bdf8', glow: '56, 189, 248', yMax: null },
+            { key: 'calories', canvasId: 'caloriesChart', avgId: 'avgCalories', suffix: ' kcal', decimals: 0, color: '#fb923c', glow: '251, 146, 60', yMax: null },
         ];
         const healthChartInstances = {};
-        const HEALTH_PERIOD_LABELS = { week: '7д', month: '30д', year: 'год', '5y': '5 лет', '10y': '10 лет' };
+        const HEALTH_PERIOD_LABELS = { week: '7d', month: '30d', year: 'year', '5y': '5 years', '10y': '10 years' };
 
         function renderHealthMetric(metric, data, labels) {
             const valid = data.filter(v => v > 0);
@@ -724,7 +713,7 @@
                     if (series) renderHealthMetric(metric, series.data, series.labels);
                 });
             } catch (e) {
-                showToast('Не удалось загрузить данные за период: ' + e.message);
+                showToast('Failed to load data for this period: ' + e.message);
             }
         }
 

@@ -250,13 +250,103 @@
                     <p class="text-2xl font-extrabold text-orange-300 mt-1" id="avgCalories">—</p>
                 </div>
             </div>
-            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
                 <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">🔥 Calories Trend</h2>
                 <p class="text-[11px] text-slate-500 mb-3">From /calories or a plain message ("burned 2150 calories").</p>
                 <div class="h-44">
                     <canvas id="caloriesChart"></canvas>
                 </div>
             </div>
+
+            <!-- Detailed snapshot from wearable-app screenshots (sleep phases /
+                 heart-rate range / stress breakdown) - see bot_handlers.handle_photo
+                 and drive_service.get_latest_health_detail. Shows the latest
+                 captured snapshot, not a period-based trend like the charts above. -->
+            <div class="flex items-center justify-between mb-3 mt-2">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider">📸 Latest Detailed Snapshot</h2>
+                {% if health_detail_date %}
+                <span class="text-[10px] text-slate-500">{{ health_detail_date }}</span>
+                {% endif %}
+            </div>
+
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4 mb-4">
+                <h3 class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-3">🛌 Sleep Phases</h3>
+                {% if health_detail.sleep %}
+                <div class="flex items-end justify-between mb-3">
+                    <div>
+                        <p class="text-2xl font-extrabold text-indigo-300">{{ health_detail.sleep.total_label }}</p>
+                        <p class="text-[10px] text-slate-500 mt-0.5">{{ health_detail.sleep.bed_time }} → {{ health_detail.sleep.wake_time }}</p>
+                    </div>
+                    {% if health_detail.sleep.score %}
+                    <div class="text-right">
+                        <p class="text-xl font-extrabold text-emerald-400">{{ health_detail.sleep.score }}</p>
+                        <p class="text-[9px] text-slate-500 uppercase tracking-wide">Score</p>
+                    </div>
+                    {% endif %}
+                </div>
+                {% if health_detail.sleep.has_phases %}
+                <div class="flex h-3 rounded-full overflow-hidden bg-slate-800">
+                    <div class="bg-purple-500" style="width: {{ health_detail.sleep.deep_pct }}%"></div>
+                    <div class="bg-fuchsia-400" style="width: {{ health_detail.sleep.light_pct }}%"></div>
+                    <div class="bg-rose-400" style="width: {{ health_detail.sleep.rem_pct }}%"></div>
+                    <div class="bg-amber-400" style="width: {{ health_detail.sleep.awake_pct }}%"></div>
+                </div>
+                <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2.5 text-[10px] text-slate-500">
+                    <span><span class="inline-block w-2 h-2 rounded-full bg-purple-500 mr-1"></span>Deep {{ health_detail.sleep.deep_minutes }}m</span>
+                    <span><span class="inline-block w-2 h-2 rounded-full bg-fuchsia-400 mr-1"></span>Light {{ health_detail.sleep.light_minutes }}m</span>
+                    <span><span class="inline-block w-2 h-2 rounded-full bg-rose-400 mr-1"></span>REM {{ health_detail.sleep.rem_minutes }}m</span>
+                    {% if health_detail.sleep.awake_minutes %}
+                    <span><span class="inline-block w-2 h-2 rounded-full bg-amber-400 mr-1"></span>Awake {{ health_detail.sleep.awake_minutes }}m</span>
+                    {% endif %}
+                </div>
+                {% endif %}
+                {% else %}
+                <p class="text-[11px] text-slate-500 text-center py-3">No sleep-phase data yet — send a photo of your watch app's Sleep detail screen.</p>
+                {% endif %}
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <h3 class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">❤️ Heart Rate Range</h3>
+                    {% if health_detail.heart_rate %}
+                    <p class="text-xl font-extrabold text-rose-400">{{ health_detail.heart_rate.min }}–{{ health_detail.heart_rate.max }} <span class="text-xs font-normal text-slate-500">bpm</span></p>
+                    {% if health_detail.heart_rate.resting %}
+                    <p class="text-[10px] text-slate-500 mt-1">Resting: {{ health_detail.heart_rate.resting }} bpm</p>
+                    {% endif %}
+                    {% else %}
+                    <p class="text-[11px] text-slate-500 py-2">Send a photo of your Heart Rate screen.</p>
+                    {% endif %}
+                </div>
+
+                <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                    <h3 class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">🧘 Stress</h3>
+                    {% if health_detail.stress %}
+                    <p class="text-xl font-extrabold text-amber-400">{{ health_detail.stress.avg }} <span class="text-xs font-normal text-slate-500">avg</span></p>
+                    {% if health_detail.stress.min is not none and health_detail.stress.max is not none %}
+                    <p class="text-[10px] text-slate-500 mt-1">Range: {{ health_detail.stress.min }}–{{ health_detail.stress.max }}</p>
+                    {% endif %}
+                    {% else %}
+                    <p class="text-[11px] text-slate-500 py-2">Send a photo of your Stress screen.</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if health_detail.stress and health_detail.stress.has_breakdown %}
+            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-4">
+                <h3 class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-3">Stress Breakdown</h3>
+                <div class="flex items-center gap-4">
+                    <div class="w-24 h-24 shrink-0">
+                        <canvas id="stressBreakdownChart"></canvas>
+                    </div>
+                    <div class="flex flex-col gap-1.5 text-[11px] text-slate-400">
+                        <span><span class="inline-block w-2 h-2 rounded-full bg-sky-400 mr-1.5"></span>Low — {{ health_detail.stress.low_pct }}%</span>
+                        <span><span class="inline-block w-2 h-2 rounded-full bg-emerald-400 mr-1.5"></span>Normal — {{ health_detail.stress.normal_pct }}%</span>
+                        <span><span class="inline-block w-2 h-2 rounded-full bg-amber-400 mr-1.5"></span>Medium — {{ health_detail.stress.medium_pct }}%</span>
+                        <span><span class="inline-block w-2 h-2 rounded-full bg-orange-500 mr-1.5"></span>High — {{ health_detail.stress.high_pct }}%</span>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
         </div>
 
         <!-- TAB 3: STUDY -->
@@ -682,6 +772,34 @@
             HEALTH_METRICS.forEach(metric => {
                 const [data, labels] = initialSeries[metric.key];
                 renderHealthMetric(metric, data, labels);
+            });
+            initStressBreakdownChart();
+        }
+
+        function initStressBreakdownChart() {
+            // Only rendered when the "Stress Breakdown" card itself rendered
+            // (health_detail.stress.has_breakdown in the template) - the
+            // canvas simply doesn't exist otherwise, no data yet to show.
+            const canvas = document.getElementById('stressBreakdownChart');
+            if (!canvas) return;
+            const breakdown = {{ (health_detail.stress or {}) | tojson }};
+            new Chart(canvas.getContext('2d'), {
+                type: 'doughnut',
+                data: {
+                    labels: ['Low', 'Normal', 'Medium', 'High'],
+                    datasets: [{
+                        data: [breakdown.low_pct || 0, breakdown.normal_pct || 0, breakdown.medium_pct || 0, breakdown.high_pct || 0],
+                        backgroundColor: ['#38bdf8', '#34d399', '#fbbf24', '#f97316'],
+                        borderColor: '#0f172a',
+                        borderWidth: 2,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '65%',
+                    plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${ctx.parsed}%` } } },
+                },
             });
         }
 

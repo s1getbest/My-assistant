@@ -748,6 +748,57 @@ def get_health_dashboard_series(period="week"):
     return result
 
 
+def merge_health_detail_for_date(date_str, partial_record):
+    """
+    Shallow-merges partial_record's top-level keys ("sleep"/"heart_rate"/
+    "stress"/...) into HealthDetailed.json's existing record for
+    date_str, leaving any key NOT present in partial_record untouched.
+
+    This matters because these records typically get filled in from
+    separate photos of separate screens (a sleep-stages screenshot, a
+    heart-rate screenshot, a stress screenshot - see bot_handlers.
+    handle_photo) sent at different times, possibly on different days
+    after the fact. A sleep-only photo replacing the WHOLE day's record
+    would silently erase a heart-rate or stress section a previous photo
+    already captured for that same date - only unrecognized garbage is
+    the actual outcome we want to guard against, not partial reporting.
+
+    Returns the merged per-day record.
+    """
+    result_holder = {}
+
+    def mutate(data):
+        if not isinstance(data, dict):
+            data = {}
+        existing = data.get(date_str)
+        if not isinstance(existing, dict):
+            existing = {}
+        existing.update(partial_record)
+        data[date_str] = existing
+        result_holder["record"] = existing
+        return data
+
+    update_json_file_on_drive(vault_files.HEALTH_DETAILED, mutate, default_factory=dict)
+    return result_holder.get("record")
+
+
+def get_latest_health_detail():
+    """
+    Returns (date_str, record) for the most recent date present in
+    HealthDetailed.json, or (None, None) if it's empty/missing. Powers
+    the dashboard's sleep-phases/heart-rate-range/stress-breakdown cards,
+    which show the latest captured snapshot rather than a full history
+    (see ARCHITECTURE.md on why full historical trend charts for these
+    are a later step, not today's).
+    """
+    data = read_json_from_drive(vault_files.HEALTH_DETAILED)
+    if not isinstance(data, dict) or not data:
+        return None, None
+    latest_date = max(data.keys())
+    record = data.get(latest_date)
+    return latest_date, (record if isinstance(record, dict) else None)
+
+
 def has_health_entry_for_date(entry_type, date_str):
     """
     True if Health.md has an entry of the given type (see

@@ -630,7 +630,17 @@ Today's date: {today_str}
 
 The user sent an image. Here is its caption (if any): "{caption}"
 
-Analyze this image. If it's a receipt, calculate the total and output `[FINANCE] YYYY-MM-DD: amount | category | description`. If it's handwritten notes or a whiteboard, extract actionable items as `[TASK_ADD] YYYY-MM-DD HH:MM | Task`. If it's an article/screenshot, summarize it as `[MEMORY] summary`.
+Analyze this image. If it's a receipt, calculate the total and output `[FINANCE] YYYY-MM-DD: amount | category | description`. If it's handwritten notes or a whiteboard, extract actionable items as `[TASK_ADD] YYYY-MM-DD HH:MM | Task`.
+
+If it's a screenshot from a fitness/wearable tracking app's Sleep, Heart Rate, or Stress detail screen, extract the visible numbers as ONE compact single-line JSON tag (no line breaks inside it):
+[HEALTH_DETAIL] {{"date": "YYYY-MM-DD", "sleep": {{...}}, "heart_rate": {{...}}, "stress": {{...}}}}
+Only include the top-level key(s) for what that specific screenshot actually shows - a Sleep-only screenshot gets ONLY a "sleep" key, not empty "heart_rate"/"stress" keys. Use exactly these sub-fields, omitting any not visible in the image:
+  - sleep: total_minutes, deep_minutes, light_minutes, rem_minutes, awake_minutes, score (0-100 sleep quality score if shown), bed_time ("HH:MM"), wake_time ("HH:MM"). Convert any "Xh Ymin" duration shown on screen into total minutes.
+  - heart_rate: min, max, resting (bpm).
+  - stress: avg, min, max, low_pct, normal_pct, medium_pct, high_pct (the Low/Normal/Medium/High percentage breakdown, if shown).
+If the date isn't visible on screen, use today's date ({today_str}). Do not guess numbers that aren't actually visible - omit a sub-field entirely rather than inventing a value.
+
+If it's some other kind of article/screenshot, summarize it as `[MEMORY] summary`.
 {extraction_rules}
 
 Besides the tags, write the user a brief, substantive reply/comment. Start your reply with [REPLY] to separate the live reply from the tags.

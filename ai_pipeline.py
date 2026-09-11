@@ -13,6 +13,7 @@ Both bot_handlers.py and scheduler_jobs.py import from this module;
 scheduler_jobs.py no longer needs to import anything from bot_handlers.py.
 """
 import re
+import json
 import threading
 from datetime import datetime
 from uuid import uuid4
@@ -32,6 +33,7 @@ from drive_service import (
     update_json_file_on_drive,
     get_folder_id,
     DEFAULT_GOALS_CONTENT,
+    merge_health_detail_for_date,
 )
 
 logger = get_logger(__name__)
@@ -43,7 +45,7 @@ _ENTITY_INDEX_CATEGORY = {"media": "media", "person": "people", "project": "proj
 # === REGEX CONSTANTS ===
 TAG_LINE_RE = re.compile(
     r'^\[(TASK_ADD|TASK_DEL|TASK_EDIT|HEALTH|FINANCE|MEMORY|SCHEDULE|QUESTION|JOURNAL|GOAL'
-    r'|STEPS|HEART_RATE|STRESS|DISTANCE|CALORIES|INBOX|NOTE|CARD|MEDIA|PERSON|PROJECT)\]\s*(.+)$',
+    r'|STEPS|HEART_RATE|STRESS|DISTANCE|CALORIES|HEALTH_DETAIL|INBOX|NOTE|CARD|MEDIA|PERSON|PROJECT)\]\s*(.+)$',
     re.MULTILINE
 )
 
@@ -474,6 +476,25 @@ def apply_gemini_tags(tags):
                 append_health_metric("Distance", payload)
             elif tag_type == "CALORIES":
                 append_health_metric("Calories", payload)
+            elif tag_type == "HEALTH_DETAIL":
+                # Emitted by bot_handlers.handle_photo when a wearable-app
+                # screenshot (sleep stages, heart-rate range, stress
+                # breakdown) is recognized - payload is a single-line JSON
+                # object, e.g. {"date": "2026-09-11", "sleep": {...}}.
+                # Only the sections actually visible in that one photo are
+                # present; merge_health_detail_for_date leaves any other
+                # section already on file for that date untouched, since a
+                # sleep-only photo and a stress-only photo for the same day
+                # normally arrive as two separate messages.
+                try:
+                    record = json.loads(payload)
+                except (ValueError, TypeError):
+                    logger.warning(f"[Tag Apply] Malformed HEALTH_DETAIL JSON: {payload!r}")
+                else:
+                    if isinstance(record, dict):
+                        date_str = record.pop("date", None) or datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+                        if record:
+                            merge_health_detail_for_date(date_str, record)
             elif tag_type == "SCHEDULE" and "|" in payload:
                 dt_str, task_text = payload.split("|", 1)
                 dt_str, task_text = dt_str.strip(), task_text.strip()

@@ -28,6 +28,7 @@ from drive_service import (
     get_calories_chart_data,
     get_health_dashboard_series,
     HEALTH_PERIOD_DAYS,
+    get_latest_health_detail,
     get_habit_completion_array,
     get_monthly_expenses,
     get_expenses_by_category,
@@ -41,6 +42,79 @@ def _days_streak_label(n):
     """English has none of Russian's день/дня/дней pluralization
     complexity - just singular "day" for 1, "days" otherwise."""
     return f"{n} day{'s' if n != 1 else ''} in a row"
+
+
+def _build_health_detail_view(record):
+    """
+    Precomputes safe, render-ready values from one HealthDetailed.json
+    day record (see drive_service.get_latest_health_detail) for the
+    dashboard's sleep-phases/heart-rate-range/stress-breakdown snapshot
+    cards. Doing the arithmetic (totals, percentages, duration
+    formatting) here once in Python is simpler and easier to get right
+    than repeating it in Jinja against keys that may or may not be
+    present - a partial record (e.g. a sleep-only photo, no heart_rate/
+    stress captured yet) is the normal case, not an edge case.
+
+    Returns {"sleep": {...}} / {"heart_rate": {...}} / {"stress": {...}}
+    for whichever sections are present and have real data; a section
+    with no usable numbers is simply absent from the result so the
+    template's {% if %} checks stay simple.
+    """
+    record = record or {}
+    view = {}
+
+    sleep = record.get("sleep")
+    if isinstance(sleep, dict):
+        deep = sleep.get("deep_minutes") or 0
+        light = sleep.get("light_minutes") or 0
+        rem = sleep.get("rem_minutes") or 0
+        awake = sleep.get("awake_minutes") or 0
+        phase_total = deep + light + rem + awake
+        total = sleep.get("total_minutes") or phase_total
+        if total or sleep.get("score") or sleep.get("bed_time"):
+            view["sleep"] = {
+                "total_label": f"{total // 60}h {total % 60}m" if total else "—",
+                "bed_time": sleep.get("bed_time") or "—",
+                "wake_time": sleep.get("wake_time") or "—",
+                "score": sleep.get("score"),
+                "deep_minutes": deep,
+                "light_minutes": light,
+                "rem_minutes": rem,
+                "awake_minutes": awake,
+                "deep_pct": round(deep / phase_total * 100, 1) if phase_total else 0,
+                "light_pct": round(light / phase_total * 100, 1) if phase_total else 0,
+                "rem_pct": round(rem / phase_total * 100, 1) if phase_total else 0,
+                "awake_pct": round(awake / phase_total * 100, 1) if phase_total else 0,
+                "has_phases": phase_total > 0,
+            }
+
+    hr = record.get("heart_rate")
+    if isinstance(hr, dict) and (hr.get("min") is not None or hr.get("max") is not None or hr.get("resting") is not None):
+        view["heart_rate"] = {
+            "min": hr.get("min"),
+            "max": hr.get("max"),
+            "resting": hr.get("resting"),
+        }
+
+    stress = record.get("stress")
+    if isinstance(stress, dict) and stress.get("avg") is not None:
+        low = stress.get("low_pct") or 0
+        normal = stress.get("normal_pct") or 0
+        medium = stress.get("medium_pct") or 0
+        high = stress.get("high_pct") or 0
+        view["stress"] = {
+            "avg": stress.get("avg"),
+            "min": stress.get("min"),
+            "max": stress.get("max"),
+            "low_pct": low,
+            "normal_pct": normal,
+            "medium_pct": medium,
+            "high_pct": high,
+            "has_breakdown": (low + normal + medium + high) > 0,
+        }
+
+    return view
+
 
 # Initialize Flask Mini App
 app = Flask(__name__)
@@ -318,6 +392,13 @@ def home():
         calories_data, calories_labels, last_calories = [0], ["No data"], "—"
 
     try:
+        health_detail_date, health_detail_record = get_latest_health_detail()
+        health_detail = _build_health_detail_view(health_detail_record)
+    except Exception as e:
+        logger.error(f"[Dashboard] Error getting latest health detail: {e}")
+        health_detail_date, health_detail = None, {}
+
+    try:
         habit_data = get_habit_completion_array()
         if not habit_data:
             raise ValueError("Empty habit completion array")
@@ -433,6 +514,8 @@ def home():
         calories_data=calories_data,
         calories_labels=calories_labels,
         last_calories=last_calories,
+        health_detail_date=health_detail_date,
+        health_detail=health_detail,
         habit_data=habit_data,
         welcome_msg=welcome_msg,
         flashcard_stats=flashcard_stats,

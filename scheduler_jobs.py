@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -17,6 +18,7 @@ from drive_service import (
     read_or_create_goals,
     update_file_on_drive,
     has_health_entry_for_date,
+    get_latest_health_detail,
 )
 from ai_pipeline import (
     apply_format_rule,
@@ -358,6 +360,28 @@ def morning_briefing():
                 for card in review_cards
             )
 
+        # Latest detailed sleep snapshot (from a Sleep-screen photo, see
+        # HealthDetailed.json / merge_health_detail_for_date), only if it's
+        # from last night or today - an old snapshot from weeks ago isn't
+        # "how you slept" and would be misleading to mention here.
+        sleep_text = "No recent detailed sleep data."
+        detail_date, detail_record = get_latest_health_detail()
+        if detail_date and isinstance(detail_record, dict):
+            yesterday_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+            if detail_date in (today_str, yesterday_str):
+                sleep = detail_record.get("sleep")
+                if isinstance(sleep, dict) and sleep:
+                    parts = []
+                    if sleep.get("score") is not None:
+                        parts.append(f"score {sleep['score']}/100")
+                    if sleep.get("total_minutes") is not None:
+                        h, m = divmod(int(sleep["total_minutes"]), 60)
+                        parts.append(f"{h}h {m}m total")
+                    if sleep.get("deep_minutes") is not None:
+                        parts.append(f"{sleep['deep_minutes']}min deep")
+                    if parts:
+                        sleep_text = f"Last night's sleep ({detail_date}): " + ", ".join(parts)
+
         prompt = apply_format_rule(f"""You are an elite productivity coach. Review the user's long-term goals in Goals.md and their schedule in Tasks.md.
   1. Write an inspiring, concise morning briefing (NO double asterisks `**`, NO TTS audio).
   2. Formulate EXACTLY ONE actionable micro-task for today that advances the user toward one of their long-term goals.
@@ -372,6 +396,8 @@ Today's tasks:
 Flashcards for review:
 {review_text}
 
+{sleep_text}
+
 Long-term memory (Memory.md):
 ---
 {current_memory or "Empty."}
@@ -382,7 +408,7 @@ Long-term goals (Goals.md):
 {goals_content or "Empty."}
 ---
 
-Write a concise, inspiring morning briefing in English. Highlight key tasks, add review block, suggest ONE small actionable micro-task for today that advances long-term goals, and wish productive day. Be brief and to the point.
+Write a concise, inspiring morning briefing in English. Highlight key tasks, add review block, suggest ONE small actionable micro-task for today that advances long-term goals, and wish productive day. If detailed sleep data is available, briefly acknowledge it (e.g. congratulate good sleep, or gently suggest an earlier night if it was short/poor) - skip this if no recent sleep data is available. Be brief and to the point.
 """)
         response = key_manager.generate_content(
             model=config.MODEL_COMPLEX,
@@ -434,6 +460,7 @@ def weekly_audit():
         tasks_content = read_file_from_drive(vault_files.TASKS)
         finance_content = read_file_from_drive(vault_files.FINANCE)
         health_content = read_file_from_drive(vault_files.HEALTH)
+        health_detailed_data = read_json_from_drive(vault_files.HEALTH_DETAILED)
 
         def filter_last_7_days(content, dates_list):
             filtered = []
@@ -445,6 +472,18 @@ def weekly_audit():
         tasks_7d = filter_last_7_days(tasks_content, dates)
         finance_7d = filter_last_7_days(finance_content, dates)
         health_7d = filter_last_7_days(health_content, dates)
+
+        # HealthDetailed.json (sleep phases/HR range/stress breakdown, filled
+        # in from wearable-app screenshots - see ARCHITECTURE.md 8.21) isn't
+        # in Health.md's line format, so filter_last_7_days can't see it.
+        # Without this, a week where the user sent detailed sleep/stress
+        # photos every day but never used /sleep or /steps would silently
+        # report "no entries" here even though real data exists.
+        health_detailed_7d = "No entries."
+        if isinstance(health_detailed_data, dict) and health_detailed_data:
+            week_records = {d: health_detailed_data[d] for d in dates if d in health_detailed_data}
+            if week_records:
+                health_detailed_7d = json.dumps(week_records, ensure_ascii=False, indent=2)
 
         # Second Brain weekly activity: which people/media/project entities
         # were first created this week, using Index.json's "added" date
@@ -483,6 +522,11 @@ Here is the data for the past 7 days (dates: {', '.join(dates[::-1])}):
 ### Health.md (7-day data):
 ---
 {health_7d or "No entries."}
+---
+
+### HealthDetailed.json (7-day data - sleep phases, HR range, stress breakdown):
+---
+{health_detailed_7d}
 ---
 
 ### Second Brain (new this week - people/media/projects):

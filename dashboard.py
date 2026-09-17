@@ -38,6 +38,93 @@ from drive_service import (
 logger = get_logger(__name__)
 
 
+def _format_relative_minutes(total_minutes):
+    """"5m" / "1h 20m" - used by task status badges below."""
+    total_minutes = max(0, int(total_minutes))
+    h, m = divmod(total_minutes, 60)
+    if h and m:
+        return f"{h}h {m}m"
+    if h:
+        return f"{h}h"
+    return f"{m}m"
+
+
+def _annotate_task_progress(tasks, raw_classes, now):
+    """
+    Attaches a `status` dict ({kind, label, progress_pct}) to each open
+    (not-done) task in `tasks` that has a parseable "HH:MM" time, so the
+    dashboard can show "starts in 20m" / a live in-progress bar / "overdue
+    by 15m" instead of just a static time stamp - the ask being able to
+    see a class's actual progress and end, not just its start.
+
+    Only class tasks (injected by scheduler_jobs.inject_todays_classes,
+    recognizable by the "🎓 " prefix scheduler_jobs always writes) get a
+    real "in progress" window, resolved via university_schedule.
+    class_end_time() against `raw_classes` (today's (start, end, subject)
+    tuples from Schedule.md - the source of truth for an explicit end
+    time, if the user gave one). A plain task has no known duration, so
+    it only ever shows "upcoming" or "overdue", never "in progress" -
+    inventing a duration for an arbitrary to-do would just be guessing.
+
+    Mutates and returns `tasks`; done tasks and tasks with no parseable
+    time (task.time == "—") are left without a `status` key entirely.
+    """
+    class_ends = {}
+    for start, end, subject in raw_classes:
+        resolved_end = university_schedule.class_end_time(start, end)
+        if resolved_end:
+            class_ends[subject] = (start, resolved_end)
+
+    for task in tasks:
+        task["status"] = None
+        if task.get("done"):
+            continue
+        time_str = task.get("time")
+        if not time_str or time_str == "—":
+            continue
+        try:
+            start_h, start_m = (int(x) for x in time_str.split(":"))
+        except (ValueError, AttributeError):
+            continue
+        start_dt = now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+
+        text = (task.get("text") or "").strip()
+        is_class = text.startswith("🎓")
+        end_dt = None
+        if is_class:
+            subject = text[1:].strip()
+            match = class_ends.get(subject)
+            if match and match[0] == time_str:
+                try:
+                    end_h, end_m = (int(x) for x in match[1].split(":"))
+                    end_dt = now.replace(hour=end_h, minute=end_m, second=0, microsecond=0)
+                except (ValueError, AttributeError):
+                    end_dt = None
+
+        if now < start_dt:
+            task["status"] = {
+                "kind": "upcoming",
+                "label": f"Starts in {_format_relative_minutes((start_dt - now).total_seconds() / 60)}",
+                "progress_pct": 0,
+            }
+        elif end_dt and now <= end_dt:
+            total = max((end_dt - start_dt).total_seconds(), 1)
+            elapsed = (now - start_dt).total_seconds()
+            task["status"] = {
+                "kind": "in_progress",
+                "label": f"In progress · ends in {_format_relative_minutes((end_dt - now).total_seconds() / 60)}",
+                "progress_pct": round(min(100, max(0, elapsed / total * 100))),
+            }
+        else:
+            reference = end_dt or start_dt
+            task["status"] = {
+                "kind": "overdue",
+                "label": f"Overdue by {_format_relative_minutes((now - reference).total_seconds() / 60)}",
+                "progress_pct": 100,
+            }
+    return tasks
+
+
 def _days_streak_label(n):
     """English has none of Russian's день/дня/дней pluralization
     complexity - just singular "day" for 1, "days" otherwise."""
@@ -447,10 +534,16 @@ def home():
 
     try:
         raw_classes = university_schedule.get_classes_for_date(datetime.now(config.msk_tz).date())
-        today_classes = [{"time": t, "subject": s} for t, s in raw_classes]
+        today_classes = [{"time": t, "subject": s} for t, _end, s in raw_classes]
     except Exception as e:
         logger.error(f"[Dashboard] Error getting today's classes: {e}")
         today_classes = []
+        raw_classes = []
+
+    try:
+        _annotate_task_progress(today_tasks, raw_classes, datetime.now(config.msk_tz))
+    except Exception as e:
+        logger.error(f"[Dashboard] Error annotating task progress: {e}")
 
     try:
         finance_total, finance_recent = get_monthly_expenses()

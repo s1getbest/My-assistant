@@ -177,17 +177,74 @@ def check_daily_sleep():
         logger.error(f"[Scheduler] Sleep check error: {e}")
 
 
-def evening_planning_reminder():
+def evening_review():
     """
-    Scheduled job at 20:00 PM reminding the user to plan their next day.
+    Scheduled job at 20:00 PM - replaces the old static "time for evening
+    planning" boilerplate with an actual AI-written recap of today: which
+    tasks got done vs are still open, and today's spending if any was
+    logged. Deliberately lighter-weight than morning_briefing: MODEL_LITE
+    (a same-day summary doesn't need heavy reasoning, and this runs every
+    single day rather than being read once), no [TASK_ADD]/tag parsing -
+    this is meant to be read-only reflection at night, not another source
+    of new obligations right before bed.
+
+    If literally nothing was logged today (no tasks, no spending), skips
+    the AI call and sends a short static prompt instead - forcing a
+    "recap" out of an empty day would just be noise.
     """
     try:
+        today_tasks = get_today_tasks()
+        done_tasks = [t for t in today_tasks if t.get("done")]
+        open_tasks = [t for t in today_tasks if not t.get("done")]
+
+        today_str = datetime.now(config.msk_tz).strftime("%Y-%m-%d")
+        finance_content = read_file_from_drive(vault_files.FINANCE)
+        today_finance_lines = [
+            line.strip() for line in finance_content.split("\n")
+            if today_str in line
+        ]
+
+        if not today_tasks and not today_finance_lines:
+            bot.send_message(
+                config.MY_TELEGRAM_ID,
+                "🌙 EVENING REVIEW\n\nNo tasks or spending logged today. Sort through your to-dos and set a plan for tomorrow, so you can go to bed with a clear head.",
+            )
+            return
+
+        done_text = "\n".join(f"- {t.get('time', '—')} | {t.get('text')}" for t in done_tasks) or "None."
+        open_text = "\n".join(f"- {t.get('time', '—')} | {t.get('text')}" for t in open_tasks) or "None."
+        finance_text = "\n".join(today_finance_lines) or "No spending logged today."
+
+        prompt = apply_format_rule(f"""You are a warm, supportive evening companion, not a taskmaster. Write a brief (3-5 sentences) end-of-day recap for the user.
+
+Completed today:
+{done_text}
+
+Still open:
+{open_text}
+
+Today's spending:
+{finance_text}
+
+Acknowledge what got done (genuinely, not generic praise). Mention open items without guilt-tripping - carrying something to tomorrow is normal, not a failure. If it's natural, suggest ONE light focus for tomorrow, but don't force it. End on a calm, restful note (going to bed with a clear head), NOT hype or a call to action. No double asterisks `**`, no tags, no TTS audio, English only.
+""")
+        response = key_manager.generate_content(
+            model=config.MODEL_LITE,
+            contents=prompt
+        )
+        raw_text = (response.text or "").strip()
+        if is_ai_response_empty(raw_text):
+            logger.warning("[Scheduler] Evening review AI response was empty, skipping send.")
+            return
+
+        review_clean = sanitize_telegram_text(raw_text)
         bot.send_message(
             config.MY_TELEGRAM_ID,
-            "Time for evening planning! 🌙 Sort through your to-dos and set a plan for tomorrow, so you can go to bed with a clear head.",
+            f"🌙 EVENING REVIEW\n\n{review_clean}"
         )
+        logger.info("[Scheduler] Evening review successfully sent.")
     except Exception as e:
-        logger.error(f"[Scheduler] Evening reminder error: {e}")
+        logger.error(f"[Scheduler] Evening review error: {e}")
 
 
 def compress_memory():
@@ -590,7 +647,7 @@ def inject_todays_classes():
         def mutate(content):
             lines = content.split("\n") if content.strip() else []
             new_lines = []
-            for time_str, subject in classes:
+            for time_str, _end_str, subject in classes:
                 already_present = any(
                     today_str in existing_line and subject in existing_line and "🎓" in existing_line
                     for existing_line in lines
@@ -610,10 +667,77 @@ def inject_todays_classes():
         logger.error(f"[Scheduler] Error injecting today's classes: {e}")
 
 
+# (today_date, start_time, subject) of every "starting soon" class nudge
+# already sent, so a 5-minute-interval job doesn't repeat itself for the
+# same class within its lead window (see check_upcoming_classes). In
+# memory only - deliberately not persisted: a process restart re-sending
+# one nudge for a class starting within the next few minutes is a minor
+# annoyance, not worth the complexity of writing this to Drive on every
+# tick (the pattern used elsewhere for durable idempotency, e.g.
+# inject_todays_classes matching against Tasks.md content itself, doesn't
+# apply well here since there's nothing to match against for a reminder -
+# it isn't its own line in the vault).
+_CLASS_REMINDER_LEAD_MINUTES = 10
+_reminded_classes = set()
+
+
+def check_upcoming_classes():
+    """
+    Interval job (every 5 min): nudges the user shortly before a class
+    they haven't finished/marked done is about to start - the "smart
+    schedule hint" the inject_todays_classes cron alone doesn't give,
+    since that only adds today's classes to Tasks.md once at 05:55 and
+    never mentions them again.
+
+    Only classes still present as an open (not done) task get nudged -
+    if the user already checked it off (e.g. cancelled class, or marked
+    done early) there's nothing useful to remind them of.
+    """
+    try:
+        today = datetime.now(config.msk_tz)
+        today_date = today.date()
+        today_str = today_date.strftime("%Y-%m-%d")
+        classes = university_schedule.get_classes_for_date(today_date)
+        if not classes:
+            return
+
+        open_class_subjects = {
+            t["text"][1:].strip()
+            for t in get_today_tasks()
+            if not t.get("done") and (t.get("text") or "").strip().startswith("🎓")
+        }
+
+        for start_str, _end_str, subject in classes:
+            if subject not in open_class_subjects:
+                continue
+            try:
+                start_h, start_m = (int(x) for x in start_str.split(":"))
+            except (ValueError, AttributeError):
+                continue
+            start_dt = today.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+            minutes_until = (start_dt - today).total_seconds() / 60
+            if not (0 <= minutes_until <= _CLASS_REMINDER_LEAD_MINUTES):
+                continue
+
+            key = (today_str, start_str, subject)
+            if key in _reminded_classes:
+                continue
+            _reminded_classes.add(key)
+
+            bot.send_message(
+                config.MY_TELEGRAM_ID,
+                f"🎓 **Starting soon:** {subject} at {start_str}",
+            )
+            logger.info(f"[Scheduler] Sent starting-soon reminder for '{subject}' at {start_str}.")
+    except Exception as e:
+        logger.error(f"[Scheduler] Error checking upcoming classes: {e}")
+
+
 # Register scheduled cron jobs
 scheduler.add_job(inject_todays_classes, 'cron', hour=5, minute=55)
 scheduler.add_job(morning_briefing, 'cron', hour=6, minute=0)
 scheduler.add_job(check_daily_sleep, 'cron', hour=10, minute=0)
-scheduler.add_job(evening_planning_reminder, 'cron', hour=20, minute=0)
+scheduler.add_job(check_upcoming_classes, 'interval', minutes=5)
+scheduler.add_job(evening_review, 'cron', hour=20, minute=0)
 scheduler.add_job(compress_memory, 'cron', day_of_week='sun', hour=3, minute=0)
 scheduler.add_job(weekly_audit, 'cron', day_of_week='sun', hour=20, minute=0)

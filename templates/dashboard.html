@@ -130,6 +130,21 @@
                             {% else %}
                             <p class="text-sm {{ 'line-through opacity-40' if task.done else '' }}">{{ task.text }}</p>
                             {% endif %}
+                            {% if task.status %}
+                            <div class="mt-2">
+                                <span class="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded
+                                    {{ 'text-emerald-400 bg-emerald-500/10' if task.status.kind == 'in_progress' else
+                                       'text-amber-400 bg-amber-500/10' if task.status.kind == 'overdue' else
+                                       'text-slate-400 bg-slate-500/10' }}">
+                                    {{ task.status.label }}
+                                </span>
+                                {% if task.status.kind == 'in_progress' %}
+                                <div class="mt-1.5 h-1 w-full bg-slate-800 rounded-full overflow-hidden">
+                                    <div class="h-full bg-emerald-500 rounded-full" style="width: {{ task.status.progress_pct }}%"></div>
+                                </div>
+                                {% endif %}
+                            </div>
+                            {% endif %}
                         </div>
                     </div>
                     {% endfor %}
